@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>FortiBackup Web • Konfiguracja</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#0d1117] text-[#c9d1d9]">
+    <div class="max-w-2xl mx-auto mt-12 p-8">
+        <h1 class="text-3xl font-bold mb-2">Pierwsza konfiguracja</h1>
+        <p class="text-[#8b949e] mb-8">Podaj dane połączenia z magazynem FTP/SFTP</p>
+
+        <form method="post" action="/setup" class="bg-[#161b22] border border-[#30363d] rounded-2xl p-8 space-y-6">
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm mb-1">Protokół</label>
+                    <select name="protocol" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                        <option value="sftp">SFTP</option>
+                        <option value="ftp">FTP</option>
+                        <option value="ftps">FTPS</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm mb-1">Port</label>
+                    <input type="number" name="port" value="22" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-sm mb-1">Host</label>
+                <input type="text" name="host" required class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+            </div>
+
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm mb-1">Użytkownik</label>
+                    <input type="text" name="username" required class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                </div>
+                <div>
+                    <label class="block text-sm mb-1">Hasło</label>
+                    <input type="password" name="password" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-sm mb-1">Katalog bazowy</label>
+                <input type="text" name="base_path" value="/fortibackup" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+            </div>
+
+            <button type="submit"
+                    class="w-full bg-[#1f6feb] hover:bg-[#388bfd] py-3 rounded-lg font-semibold mt-4">
+                Zapisz i przejdź do logowania
+            </button>
+        </form>
+    </div>
+</body>
+</html>

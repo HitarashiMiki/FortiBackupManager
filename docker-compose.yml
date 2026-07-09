@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  fortibackup-web:
+    build: .
+    container_name: fortibackup-web
+    ports:
+      - "8080:8000"
+    volumes:
+      - fortibackup-data:/root/.fortibackup-web
+    environment:
+      - TZ=Europe/Warsaw
+    restart: unless-stopped
+
+volumes:
+  fortibackup-data:

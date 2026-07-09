@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FortiBackup Web • Logowanie</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+<body class="bg-[#0d1117] text-[#c9d1d9]">
+    <div class="min-h-screen flex items-center justify-center">
+        <div class="w-full max-w-md">
+            <div class="text-center mb-8">
+                <div class="flex justify-center mb-4">
+                    <i class="fa-solid fa-shield-halved text-6xl text-[#1f6feb]"></i>
+                </div>
+                <h1 class="text-3xl font-bold">FortiBackup Web</h1>
+                <p class="text-[#8b949e] mt-2">Menadżer kopii zapasowych FortiGate</p>
+            </div>
+
+            <div class="bg-[#161b22] border border-[#30363d] rounded-2xl p-8">
+                {% if error %}
+                <div class="mb-4 p-3 bg-red-900/30 border border-red-700 text-red-400 rounded-lg text-sm">
+                    {{ error }}
+                </div>
+                {% endif %}
+
+                <form method="post" action="/login">
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium mb-2 text-[#8b949e]">Hasło główne</label>
+                        <input type="password" name="master_password" required
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-3 focus:outline-none focus:border-[#1f6feb]">
+                    </div>
+
+                    <button type="submit"
+                            class="w-full bg-[#1f6feb] hover:bg-[#388bfd] transition-colors text-white font-semibold py-3 rounded-lg">
+                        Odblokuj aplikację
+                    </button>
+                </form>
+            </div>
+
+            <p class="text-center text-xs text-[#8b949e] mt-6">
+                Hasło jest takie samo jak w aplikacji desktopowej
+            </p>
+        </div>
+    </div>
+</body>
+</html>

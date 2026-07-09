@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>FortiBackup Web</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        .dark-table { background: #010409; }
+        .dark-table th { background: #161b22; color: #8b949e; }
+        .version-row:hover { background: #161b22; }
+        .modal { animation: fadeInScale 0.2s ease-out forwards; }
+        @keyframes fadeInScale { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+        #log-container { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    </style>
+</head>
+<body class="bg-[#0d1117] text-[#c9d1d9] flex flex-col h-screen">
+
+    <!-- Navbar -->
+    <nav class="bg-[#161b22] border-b border-[#30363d] px-6 py-3 flex items-center justify-between flex-shrink-0">
+        <div class="flex items-center gap-x-3">
+            <i class="fa-solid fa-shield-halved text-[#1f6feb] text-2xl"></i>
+            <span class="font-bold text-xl">FortiBackup Web</span>
+        </div>
+        <div class="flex items-center gap-x-4 text-sm">
+            <span class="text-[#8b949e]">{{ settings_summary }}</span>
+            <a href="/logout" class="flex items-center gap-x-2 hover:text-red-400">
+                <i class="fa-solid fa-sign-out-alt"></i> <span>Wyloguj</span>
+            </a>
+        </div>
+    </nav>
+
+    <div class="flex flex-1 overflow-hidden">
+        <!-- Sidebar -->
+        <div class="w-80 border-r border-[#30363d] bg-[#010409] flex flex-col">
+            <div class="p-4 border-b border-[#30363d] flex justify-between items-center">
+                <span class="font-semibold text-lg">Urządzenia</span>
+                <button onclick="showAddDeviceModal()"
+                        class="bg-[#1f6feb] hover:bg-[#388bfd] px-3 py-1.5 rounded-lg text-sm flex items-center gap-x-2">
+                    <i class="fa-solid fa-plus"></i> <span>Dodaj</span>
+                </button>
+            </div>
+            <div id="devices-list" class="flex-1 overflow-auto p-2">
+            </div>
+        </div>
+
+        <!-- Główny panel -->
+        <div class="flex-1 flex flex-col overflow-hidden">
+            <div class="p-4 border-b border-[#30363d] bg-[#161b22] flex justify-between items-center">
+                <div>
+                    <h2 id="current-device-name" class="text-2xl font-semibold">Wybierz urządzenie</h2>
+                    <p id="current-device-host" class="text-[#8b949e]"></p>
+                </div>
+                <div class="flex gap-x-2">
+                    <button onclick="backupSelectedDevice()"
+                            class="px-5 py-2 bg-[#1f6feb] hover:bg-[#388bfd] rounded-lg flex items-center gap-x-2 text-sm">
+                        <i class="fa-solid fa-download"></i> <span>Backup teraz</span>
+                    </button>
+                    <button onclick="backupAllDevices()"
+                            class="px-4 py-2 bg-[#21262d] border border-[#30363d] rounded-lg text-sm">
+                        Backup wszystkich
+                    </button>
+                </div>
+            </div>
+
+            <!-- Tabela wersji -->
+            <div class="flex-1 p-5 overflow-auto">
+                <div class="flex justify-between mb-4">
+                    <span class="font-semibold text-lg">Wersje konfiguracji</span>
+                    <div class="flex gap-x-2">
+                        <button onclick="compareSelectedVersions()"
+                                class="px-4 py-2 text-sm bg-[#21262d] border border-[#30363d] rounded-lg flex items-center gap-x-2">
+                            <i class="fa-solid fa-exchange-alt"></i> <span>Porównaj zaznaczone</span>
+                        </button>
+                        <button onclick="refreshVersions()" class="px-3 py-2 text-sm bg-[#21262d] border border-[#30363d] rounded-lg">
+                            <i class="fa-solid fa-sync"></i>
+                        </button>
+                    </div>
+                </div>
+                <table class="w-full text-sm">
+                    <thead><tr class="dark-table">
+                        <th class="w-8 px-3"></th>
+                        <th class="text-left py-2 px-3">Plik</th>
+                        <th class="text-left py-2 px-3">Data</th>
+                        <th class="text-right py-2 px-3">Rozmiar</th>
+                        <th class="w-28"></th>
+                    </tr></thead>
+                    <tbody id="versions-table" class="divide-y divide-[#30363d]"></tbody>
+                </table>
+            </div>
+
+            <!-- DZIENNIK ZDARZEŃ -->
+            <div class="border-t border-[#30363d] bg-[#010409] h-44 flex flex-col flex-shrink-0">
+                <div class="flex justify-between px-4 py-2 border-b border-[#30363d]">
+                    <span class="font-semibold text-sm"><i class="fa-solid fa-terminal mr-2"></i>Dziennik zdarzeń</span>
+                    <button onclick="clearLog()" class="text-xs px-3 py-1 rounded hover:bg-[#21262d]">Wyczyść</button>
+                </div>
+                <div id="log-container" class="flex-1 overflow-auto p-3 text-xs bg-[#0d1117]"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== MODAL DODAWANIA / EDYCJI URZĄDZENIA ==================== -->
+    <div id="device-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+        <div class="bg-[#161b22] border border-[#30363d] rounded-2xl w-full max-w-2xl modal">
+            <div class="flex justify-between items-center px-6 py-4 border-b border-[#30363d]">
+                <h3 id="modal-title" class="text-xl font-semibold">Dodaj urządzenie</h3>
+                <button onclick="closeDeviceModal()" class="text-3xl leading-none">&times;</button>
+            </div>
+
+            <form id="device-form" onsubmit="submitDeviceForm(event)" class="p-6 space-y-5">
+                <input type="hidden" id="device-old-name">
+
+                <div><label class="block text-sm mb-1.5">Nazwa urządzenia *</label>
+                    <input type="text" id="device-name" required class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5"></div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div><label class="block text-sm mb-1.5">Adres (IP/FQDN) *</label>
+                        <input type="text" id="device-host" required class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5"></div>
+                    <div><label class="block text-sm mb-1.5">Port SSH</label>
+                        <input type="number" id="device-port" value="22" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5"></div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div><label class="block text-sm mb-1.5">Login SSH</label>
+                        <input type="text" id="device-username" value="admin" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5"></div>
+                    <div><label class="block text-sm mb-1.5">Hasło SSH</label>
+                        <input type="password" id="device-password" placeholder="przy edycji: puste = bez zmian" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5"></div>
+                </div>
+
+                <div>
+                    <label class="block text-sm mb-1.5">Metoda backupu</label>
+                    <select id="device-method" onchange="toggleApiFields()" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5">
+                        <option value="ssh_push">SSH Push (zalecane)</option>
+                        <option value="api_pull">REST API Pull</option>
+                    </select>
+                </div>
+
+                <div id="api-fields" class="hidden space-y-4">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div><label class="block text-sm mb-1.5">Token API</label>
+                            <input type="password" id="device-api-token" placeholder="przy edycji: puste = bez zmian" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5"></div>
+                        <div><label class="block text-sm mb-1.5">Port API (HTTPS)</label>
+                            <input type="number" id="device-api-port" value="443" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5"></div>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-x-3">
+                    <input type="checkbox" id="device-vdom" class="w-4 h-4 accent-[#1f6feb]">
+                    <label for="device-vdom" class="text-sm">Urządzenie ma włączone VDOM-y</label>
+                </div>
+
+                <div><label class="block text-sm mb-1.5">Opis</label>
+                    <input type="text" id="device-description" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5"></div>
+
+                <div class="flex justify-end gap-x-3 pt-4">
+                    <button type="button" onclick="closeDeviceModal()" class="px-5 py-2.5 rounded-lg border border-[#30363d]">Anuluj</button>
+                    <button type="submit" class="px-6 py-2.5 bg-[#1f6feb] hover:bg-[#388bfd] rounded-lg font-semibold">Zapisz</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL PORÓWNANIA -->
+    <div id="diff-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+        <div class="bg-[#161b22] border border-[#30363d] rounded-2xl w-[95%] max-w-7xl h-[85vh] flex flex-col">
+            <div class="flex justify-between items-center p-4 border-b border-[#30363d]">
+                <div class="flex items-center gap-x-4">
+                    <span class="font-semibold text-lg">Porównanie konfiguracji</span>
+                    <span id="diff-stats" class="text-sm px-3 py-1 bg-[#21262d] rounded-full"></span>
+                    <label class="flex items-center gap-x-2 text-sm cursor-pointer"
+                           title="FortiOS przy każdym eksporcie generuje na nowo sekrety ENC, klucze prywatne i conf_file_ver — bez maskowania każdy diff pokazuje pozorne zmiany">
+                        <input type="checkbox" id="diff-ignore-volatile" checked onchange="rerenderDiff()" class="accent-[#1f6feb]">
+                        Ignoruj pola ulotne
+                    </label>
+                    <label class="flex items-center gap-x-2 text-sm cursor-pointer">
+                        <input type="checkbox" id="diff-collapse" checked onchange="rerenderDiff()" class="accent-[#1f6feb]">
+                        Zwijaj bez zmian
+                    </label>
+                </div>
+                <button onclick="closeDiffModal()" class="text-3xl">&times;</button>
+            </div>
+            <div id="diff-content" class="flex-1 overflow-auto p-4 font-mono text-sm"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentDevice = null;
+        let isEditMode = false;
+
+        function addLog(msg, type = 'info') {
+            const container = document.getElementById('log-container');
+            const time = new Date().toLocaleTimeString('pl-PL');
+            const div = document.createElement('div');
+            div.className = `py-0.5 px-1 text-xs ${type === 'error' ? 'text-red-400' : type === 'success' ? 'text-[#3fb950]' : 'text-[#8b949e]'}`;
+            div.innerHTML = `<span class="text-[#6e7681]">[${time}]</span> ${msg}`;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('log-container').innerHTML = '';
+        }
+
+        // ==================== MODAL URZĄDZENIA ====================
+        function showAddDeviceModal() {
+            isEditMode = false;
+            document.getElementById('modal-title').textContent = 'Dodaj urządzenie';
+            document.getElementById('device-form').reset();
+            document.getElementById('device-old-name').value = '';
+            document.getElementById('device-method').value = 'ssh_push';
+            toggleApiFields();
+            document.getElementById('device-modal').classList.remove('hidden');
+            document.getElementById('device-modal').classList.add('flex');
+        }
+
+        async function showEditDeviceModal(name) {
+            isEditMode = true;
+            document.getElementById('modal-title').textContent = 'Edytuj urządzenie';
+
+            const res = await fetch(`/api/devices/${name}`);
+            const device = await res.json();
+
+            document.getElementById('device-old-name').value = device.name;
+            document.getElementById('device-name').value = device.name;
+            document.getElementById('device-host').value = device.host;
+            document.getElementById('device-port').value = device.port || 22;
+            document.getElementById('device-username').value = device.username || 'admin';
+            document.getElementById('device-password').value = '';   // sekrety nie są wysyłane do przeglądarki
+            document.getElementById('device-method').value = device.method || 'ssh_push';
+            document.getElementById('device-api-token').value = '';  // puste = zachowaj stary token
+            document.getElementById('device-api-port').value = device.api_port || 443;
+            document.getElementById('device-vdom').checked = !!device.vdom_enabled;
+            document.getElementById('device-description').value = device.description || '';
+
+            toggleApiFields();
+            document.getElementById('device-modal').classList.remove('hidden');
+            document.getElementById('device-modal').classList.add('flex');
+        }
+
+        function toggleApiFields() {
+            const method = document.getElementById('device-method').value;
+            document.getElementById('api-fields').classList.toggle('hidden', method !== 'api_pull');
+        }
+
+        function closeDeviceModal() {
+            document.getElementById('device-modal').classList.remove('flex');
+            document.getElementById('device-modal').classList.add('hidden');
+        }
+
+        async function submitDeviceForm(e) {
+            e.preventDefault();
+            const formData = new FormData();
+            formData.append('name', document.getElementById('device-name').value);
+            formData.append('host', document.getElementById('device-host').value);
+            formData.append('port', document.getElementById('device-port').value);
+            formData.append('username', document.getElementById('device-username').value);
+            formData.append('password', document.getElementById('device-password').value);
+            formData.append('method', document.getElementById('device-method').value);
+            formData.append('api_token', document.getElementById('device-api-token').value);
+            formData.append('api_port', document.getElementById('device-api-port').value);
+            formData.append('vdom_enabled', document.getElementById('device-vdom').checked);
+            formData.append('description', document.getElementById('device-description').value);
+
+            const oldName = document.getElementById('device-old-name').value;
+            let url = '/api/devices';
+            let method = 'POST';
+
+            if (isEditMode && oldName) {
+                url = `/api/devices/${oldName}`;
+                method = 'PUT';
+                formData.append('new_name', document.getElementById('device-name').value);
+            }
+
+            const res = await fetch(url, { method, body: formData });
+            if (res.ok) {
+                closeDeviceModal();
+                loadDevices();
+                addLog(isEditMode ? 'Urządzenie zaktualizowane' : 'Urządzenie dodane', 'success');
+            } else {
+                const err = await res.json();
+                addLog(err.detail || 'Błąd zapisu urządzenia', 'error');
+            }
+        }
+
+        // ==================== BACKUP ====================
+        async function pollJob(jobId, onFinish) {
+            let shown = 0;
+            const interval = setInterval(async () => {
+                try {
+                    const res = await fetch(`/api/jobs/${jobId}`);
+                    if (!res.ok) { clearInterval(interval); return; }
+                    const job = await res.json();
+                    // dopisuj tylko nowe linie logu
+                    for (; shown < job.log.length; shown++) addLog(job.log[shown]);
+                    if (job.status !== 'running') {
+                        clearInterval(interval);
+                        if (job.status === 'done') {
+                            addLog(`Zakończono: ${job.ok_count} OK`, 'success');
+                        } else {
+                            addLog(`Zakończono z błędami: ${job.ok_count} OK, ${job.fail_count} błędów`, 'error');
+                        }
+                        if (onFinish) onFinish(job);
+                    }
+                } catch (e) { clearInterval(interval); }
+            }, 1500);
+        }
+
+        async function backupSelectedDevice() {
+            if (!currentDevice) {
+                addLog("Najpierw wybierz urządzenie", "error");
+                return;
+            }
+            const res = await fetch(`/api/backup/${currentDevice}`, { method: 'POST' });
+            if (!res.ok) { addLog("Nie udało się uruchomić backupu", "error"); return; }
+            const data = await res.json();
+            pollJob(data.job_id, () => { if (currentDevice) loadVersions(currentDevice); });
+        }
+
+        async function backupAllDevices() {
+            if (!confirm("Uruchomić backup wszystkich urządzeń?")) return;
+            const res = await fetch('/api/backup-all', { method: 'POST' });
+            if (!res.ok) { addLog("Nie udało się uruchomić backupu", "error"); return; }
+            const data = await res.json();
+            pollJob(data.job_id, () => { if (currentDevice) loadVersions(currentDevice); });
+        }
+
+        // ==================== PORÓWNANIE ====================
+        let diffPaths = null;
+
+        async function compareSelectedVersions() {
+            const checked = document.querySelectorAll('.version-checkbox:checked');
+            if (checked.length !== 2) {
+                addLog("Zaznacz dokładnie dwie wersje", "error");
+                return;
+            }
+            // starsza po lewej (nazwy zawierają timestamp, więc sort działa)
+            const paths = [checked[0].dataset.path, checked[1].dataset.path].sort();
+            diffPaths = paths;
+            await fetchDiff();
+        }
+
+        async function rerenderDiff() {
+            if (diffPaths) await fetchDiff();
+        }
+
+        async function fetchDiff() {
+            const diffContent = document.getElementById('diff-content');
+            const diffStats = document.getElementById('diff-stats');
+            const diffModal = document.getElementById('diff-modal');
+
+            addLog("Generuję porównanie...");
+            const formData = new FormData();
+            formData.append('path_a', diffPaths[0]);
+            formData.append('path_b', diffPaths[1]);
+            formData.append('ignore_volatile', document.getElementById('diff-ignore-volatile').checked);
+            formData.append('collapse_unchanged', document.getElementById('diff-collapse').checked);
+
+            const res = await fetch('/api/compare', { method: 'POST', body: formData });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                addLog(err.detail || "Błąd porównania", "error");
+                return;
+            }
+            const data = await res.json();
+            diffContent.innerHTML = data.html;
+            diffStats.textContent = `+${data.stats.added}  −${data.stats.removed}  ~${data.stats.changed}`;
+            diffModal.classList.remove('hidden');
+            diffModal.classList.add('flex');
+            addLog("Porównanie gotowe", "success");
+        }
+
+        function closeDiffModal() {
+            const modal = document.getElementById('diff-modal');
+            modal.classList.remove('flex');
+            modal.classList.add('hidden');
+        }
+
+        // Pozostałe funkcje
+        function loadDevices() {
+    fetch('/api/devices')
+        .then(r => {
+            if (r.status === 401) { window.location = '/login'; throw new Error('401'); }
+            return r.json();
+        })
+        .then(data => {
+            const container = document.getElementById('devices-list');
+            container.innerHTML = '';
+
+            if (!data.devices || data.devices.length === 0) {
+                container.innerHTML = `<div class="px-3 py-4 text-sm text-[#8b949e]">Brak urządzeń</div>`;
+                return;
+            }
+
+            data.devices.forEach(device => {
+                const div = document.createElement('div');
+                div.className = `group px-3 py-3 rounded-xl mb-1 flex justify-between items-center hover:bg-[#161b22] cursor-pointer ${currentDevice === device.name ? 'bg-[#1f6feb] text-white' : ''}`;
+
+                div.innerHTML = `
+                    <div onclick="selectDevice(${JSON.stringify(device).replace(/"/g, '&quot;')})" class="flex-1 min-w-0">
+                        <div class="font-medium truncate">${device.name}</div>
+                        <div class="text-xs ${currentDevice === device.name ? 'text-white/70' : 'text-[#8b949e]'} truncate">${device.host}</div>
+                    </div>
+                    <div class="flex gap-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onclick="event.stopImmediatePropagation(); showEditDeviceModal('${device.name}')"
+                                class="px-2 py-1 text-[#8b949e] hover:text-white">
+                            <i class="fa-solid fa-edit"></i>
+                        </button>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        })
+        .catch(err => {
+            console.error(err);
+            addLog("Błąd ładowania listy urządzeń", "error");
+        });
+}
+        function selectDevice(device) {
+            currentDevice = device.name;
+            document.getElementById('current-device-name').textContent = device.name;
+            document.getElementById('current-device-host').textContent = `${device.host} • ${device.method}`;
+            loadDevices();
+            loadVersions(device.name);
+            addLog(`Wybrano urządzenie: ${device.name}`);
+        }
+
+        function loadVersions(deviceName) {
+            fetch(`/api/versions/${deviceName}`)
+                .then(r => r.json())
+                .then(data => {
+                    const tbody = document.getElementById('versions-table');
+                    tbody.innerHTML = '';
+
+                    if (!data.versions || data.versions.length === 0) {
+                        tbody.innerHTML = `<tr><td colspan="5" class="px-4 py-8 text-center text-[#8b949e]">Brak wersji backupów</td></tr>`;
+                        return;
+                    }
+
+                    data.versions.forEach(version => {
+                        const row = document.createElement('tr');
+                        row.className = 'version-row';
+                        row.innerHTML = `
+                            <td class="px-3"><input type="checkbox" class="version-checkbox accent-[#1f6feb]" data-path="${version.path}"></td>
+                            <td class="px-3 py-2 font-mono text-xs">${version.name}</td>
+                            <td class="px-3 py-2 text-xs">${version.mtime ? new Date(version.mtime).toLocaleString('pl-PL') : '-'}</td>
+                            <td class="px-3 py-2 text-right text-xs">${(version.size / 1024).toFixed(1)} KB</td>
+                            <td class="px-3 py-2">
+                                <div class="flex justify-end gap-x-2 text-[#1f6feb]">
+                                    <button onclick="viewVersion('${version.path}')" class="hover:text-white"><i class="fa-solid fa-eye"></i></button>
+                                    <button onclick="downloadVersion('${version.path}')" class="hover:text-white"><i class="fa-solid fa-download"></i></button>
+                                    <button onclick="deleteVersion('${version.path}', '${version.name}')" class="hover:text-red-400"><i class="fa-solid fa-trash"></i></button>
+                                </div>
+                            </td>
+                        `;
+                        tbody.appendChild(row);
+                    });
+                });
+            }
+        function refreshVersions() { if (currentDevice) loadVersions(currentDevice); }
+        function viewVersion(path) { window.open(`/api/view/${encodeURIComponent(path)}`, '_blank'); }
+        function downloadVersion(path) { window.location.href = `/api/download/${encodeURIComponent(path)}`; }
+        async function deleteVersion(path, name) {
+            if (!confirm(`Usunąć ${name}?`)) return;
+            await fetch(`/api/version/${encodeURIComponent(path)}`, { method: 'DELETE' });
+            if (currentDevice) loadVersions(currentDevice);
+            addLog(`Usunięto wersję: ${name}`);
+        }
+
+        // Inicjalizacja
+        window.onload = function() {
+            addLog("Aplikacja uruchomiona");
+            loadDevices();
+        }
+    </script>
+</body>
+</html>
