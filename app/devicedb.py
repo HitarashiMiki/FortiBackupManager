@@ -3,8 +3,8 @@ from __future__ import annotations
 import base64
 import json
 import os
-from dataclasses import dataclass, asdict
-from typing import List, Optional
+from dataclasses import dataclass, asdict, field
+from typing import Dict, List, Optional, Tuple
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
@@ -12,10 +12,28 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from .storage import RemoteStorage, StorageError
 
-MAGIC = b"FBK1"
+# Nagłówek pliku bazy. FBK1 = schemat 1 (tylko lista urządzeń). FBK2 = schemat 2
+# (foldery + min_reader_version). Podbicie magica jest CELOWE: stary program
+# (FBK1) ignorował nieznane pola i przy zapisie wyciąłby dane dopisane przez
+# nowszą wersję — zamiast tego ma odmówić otwarcia pliku.
+MAGIC_V1 = b"FBK1"
+MAGIC = b"FBK2"
+MAGIC_PREFIX = b"FBK"
 SALT_LEN = 16
 KDF_ITERATIONS = 480_000
 DB_FILENAME = "devices.db"
+
+# Najwyższa wersja schematu, którą TA wersja programu rozumie i może
+# bezpiecznie zapisywać. Baza niesie w payloadzie "min_reader_version" —
+# jeśli jest wyższa niż ta stała, program musi odmówić otwarcia.
+DB_SCHEMA_VERSION = 2
+
+DB_TOO_NEW_MSG = (
+    "Baza urządzeń została zapisana przez nowszą wersję programu "
+    "(schemat {found}, ta wersja obsługuje maks. {supported}). "
+    "Zaktualizuj FortiBackup Web — otwarcie starszą wersją mogłoby "
+    "bezpowrotnie wyciąć nowe dane."
+)
 
 
 class DeviceDBError(Exception):
@@ -23,6 +41,11 @@ class DeviceDBError(Exception):
 
 
 class WrongPasswordError(DeviceDBError):
+    pass
+
+
+class DBTooNewError(DeviceDBError):
+    """Baza zapisana przez nowszą wersję programu — wymagany update aplikacji."""
     pass
 
 
@@ -45,14 +68,25 @@ class Device:
     sched_every_hours: int = 24      # dla trybu interval
     sched_time: str = "02:00"        # dla daily/weekly (HH:MM)
     sched_weekday: int = 0           # dla weekly (0 = poniedziałek)
+    # Folder w drzewie urządzeń ("" = poza folderami / korzeń)
+    folder: str = ""
+    # Pola nieznane tej wersji programu (dopisane przez nowszą, kompatybilną
+    # wersję) — przechowywane i oddawane przy zapisie, żeby edycja starszą
+    # wersją nie wycinała cudzych danych.
+    extra: Dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        extra = d.pop("extra") or {}
+        # znane pola mają pierwszeństwo przed przechowanymi nieznanymi
+        return {**extra, **d}
 
     @staticmethod
     def from_dict(d: dict) -> "Device":
-        known = {f for f in Device.__dataclass_fields__}
-        return Device(**{k: v for k, v in d.items() if k in known})
+        known = {f for f in Device.__dataclass_fields__ if f != "extra"}
+        kwargs = {k: v for k, v in d.items() if k in known}
+        kwargs["extra"] = {k: v for k, v in d.items() if k not in known}
+        return Device(**kwargs)
 
 
 def _derive_key(password: str, salt: bytes) -> bytes:
@@ -65,20 +99,37 @@ def _derive_key(password: str, salt: bytes) -> bytes:
     return base64.urlsafe_b64encode(kdf.derive(password.encode("utf-8")))
 
 
-def encrypt_db(devices: List[Device], password: str, salt: Optional[bytes] = None) -> bytes:
+def encrypt_db(devices: List[Device], password: str, salt: Optional[bytes] = None,
+               folders: Optional[List[str]] = None,
+               extra: Optional[dict] = None) -> bytes:
     salt = salt or os.urandom(SALT_LEN)
     key = _derive_key(password, salt)
-    payload = json.dumps(
-        {"version": 1, "devices": [d.to_dict() for d in devices]},
-        ensure_ascii=False,
-    ).encode("utf-8")
+    data = dict(extra or {})  # nieznane klucze payloadu — zachowaj (jak w Device.extra)
+    data.update({
+        "version": DB_SCHEMA_VERSION,
+        # Minimalna wersja schematu, jaką musi rozumieć program, żeby móc
+        # bezpiecznie CZYTAĆ I ZAPISYWAĆ tę bazę. Przyszłe, kompatybilne
+        # rozszerzenia mogą podbić "version" nie ruszając tego pola.
+        "min_reader_version": 2,
+        "devices": [d.to_dict() for d in devices],
+        "folders": sorted(set(folders or []), key=str.lower),
+    })
+    payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
     token = Fernet(key).encrypt(payload)
     return MAGIC + salt + token
 
 
-def decrypt_db(blob: bytes, password: str) -> List[Device]:
-    if len(blob) < len(MAGIC) + SALT_LEN or not blob.startswith(MAGIC):
+def decrypt_payload(blob: bytes, password: str) -> dict:
+    """Odszyfrowuje bazę (FBK1 lub FBK2) i zwraca surowy payload JSON.
+    Rzuca DBTooNewError, gdy bazę zapisała nowsza wersja programu."""
+    if len(blob) < len(MAGIC) + SALT_LEN or not blob.startswith(MAGIC_PREFIX):
         raise DeviceDBError("Nieprawidłowy format pliku bazy urządzeń.")
+    magic = blob[:len(MAGIC)]
+    if magic not in (MAGIC_V1, MAGIC):
+        # FBK3+ — nagłówek z przyszłości, nawet nie próbujemy deszyfrować
+        raise DBTooNewError(DB_TOO_NEW_MSG.format(
+            found=magic.decode("ascii", errors="replace"),
+            supported=DB_SCHEMA_VERSION))
     salt = blob[len(MAGIC):len(MAGIC) + SALT_LEN]
     token = blob[len(MAGIC) + SALT_LEN:]
     key = _derive_key(password, salt)
@@ -87,7 +138,20 @@ def decrypt_db(blob: bytes, password: str) -> List[Device]:
     except InvalidToken:
         raise WrongPasswordError("Błędne hasło główne lub uszkodzona baza.")
     data = json.loads(payload.decode("utf-8"))
-    return [Device.from_dict(d) for d in data.get("devices", [])]
+    min_reader = int(data.get("min_reader_version", 1))
+    if min_reader > DB_SCHEMA_VERSION:
+        raise DBTooNewError(DB_TOO_NEW_MSG.format(
+            found=min_reader, supported=DB_SCHEMA_VERSION))
+    return data
+
+
+def decrypt_db(blob: bytes, password: str) -> Tuple[List[Device], List[str]]:
+    data = decrypt_payload(blob, password)
+    devices = [Device.from_dict(d) for d in data.get("devices", [])]
+    # foldery = zadeklarowane + te faktycznie użyte na urządzeniach
+    folders = set(data.get("folders", []))
+    folders.update(d.folder for d in devices if d.folder)
+    return devices, sorted(folders, key=str.lower)
 
 
 class DeviceDB:
@@ -95,25 +159,39 @@ class DeviceDB:
         self.storage = storage
         self.password = password
         self.devices: List[Device] = []
+        self.folders: List[str] = []
+        self._extra: dict = {}          # nieznane klucze payloadu (patrz encrypt_db)
         self._salt: Optional[bytes] = None
 
     @property
     def remote_path(self) -> str:
         return self.storage.join(DB_FILENAME)
 
+    def _ingest(self, blob: bytes) -> None:
+        data = decrypt_payload(blob, self.password)
+        self.devices = [Device.from_dict(d) for d in data.get("devices", [])]
+        folders = set(data.get("folders", []))
+        folders.update(d.folder for d in self.devices if d.folder)
+        self.folders = sorted(folders, key=str.lower)
+        self._extra = {k: v for k, v in data.items()
+                       if k not in ("version", "min_reader_version",
+                                    "devices", "folders")}
+
     def load_or_create(self) -> bool:
         self.storage.ensure_dir(self.storage.cfg.base_path)
         if self.storage.exists(self.remote_path):
             blob = self.storage.download_bytes(self.remote_path)
-            self.devices = decrypt_db(blob, self.password)
+            self._ingest(blob)
             self._salt = blob[len(MAGIC):len(MAGIC) + SALT_LEN]
             return True
         self.devices = []
+        self.folders = []
         self.save()
         return False
 
     def save(self) -> None:
-        blob = encrypt_db(self.devices, self.password, self._salt)
+        blob = encrypt_db(self.devices, self.password, self._salt,
+                          folders=self.folders, extra=self._extra)
         if self._salt is None:
             self._salt = blob[len(MAGIC):len(MAGIC) + SALT_LEN]
         self.storage.upload_bytes(blob, self.remote_path)
@@ -121,7 +199,7 @@ class DeviceDB:
     def reload(self) -> None:
         if self.storage.exists(self.remote_path):
             blob = self.storage.download_bytes(self.remote_path)
-            self.devices = decrypt_db(blob, self.password)
+            self._ingest(blob)
 
     def get(self, name: str) -> Optional[Device]:
         return next((d for d in self.devices if d.name == name), None)
@@ -149,4 +227,52 @@ class DeviceDB:
         except StorageError:
             pass
         self.devices = [d for d in self.devices if d.name != name]
+        self.save()
+
+    # -- foldery ---------------------------------------------------------------
+
+    def add_folder(self, name: str) -> None:
+        try:
+            self.reload()
+        except StorageError:
+            pass
+        name = name.strip()
+        if not name:
+            raise DeviceDBError("Nazwa folderu nie może być pusta.")
+        if any(f.lower() == name.lower() for f in self.folders):
+            raise DeviceDBError(f"Folder '{name}' już istnieje.")
+        self.folders.append(name)
+        self.folders.sort(key=str.lower)
+        self.save()
+
+    def remove_folder(self, name: str) -> int:
+        """Usuwa folder; jego urządzenia lądują poza folderami (korzeń).
+        Zwraca liczbę przeniesionych urządzeń."""
+        try:
+            self.reload()
+        except StorageError:
+            pass
+        if name not in self.folders:
+            raise DeviceDBError(f"Folder '{name}' nie istnieje.")
+        moved = 0
+        for d in self.devices:
+            if d.folder == name:
+                d.folder = ""
+                moved += 1
+        self.folders = [f for f in self.folders if f != name]
+        self.save()
+        return moved
+
+    def move_device(self, name: str, folder: str) -> None:
+        try:
+            self.reload()
+        except StorageError:
+            pass
+        device = self.get(name)
+        if not device:
+            raise DeviceDBError(f"Urządzenie '{name}' nie istnieje.")
+        folder = folder.strip()
+        if folder and folder not in self.folders:
+            raise DeviceDBError(f"Folder '{folder}' nie istnieje.")
+        device.folder = folder
         self.save()
