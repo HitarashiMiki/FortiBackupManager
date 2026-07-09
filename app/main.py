@@ -44,8 +44,14 @@ from .diff import make_diff_html
 from .security import (SESSIONS, LOGIN_LIMITER, get_or_create_secret,
                        safe_backup_path, PathTraversalError)
 from .jobs import JOBS
+from .scheduler import SCHEDULER
 
 app = FastAPI(title="FortiBackup Web", docs_url=None, redoc_url=None)
+
+
+@app.on_event("startup")
+def _start_scheduler():
+    SCHEDULER.start_once()
 app.add_middleware(
     SessionMiddleware,
     secret_key=get_or_create_secret(),
@@ -58,7 +64,9 @@ templates = Jinja2Templates(directory="app/templates")
 
 # Pola urządzenia bezpieczne do wysłania do przeglądarki (BEZ sekretów)
 _DEVICE_PUBLIC_FIELDS = ("name", "host", "port", "username", "method",
-                         "api_port", "vdom_enabled", "description")
+                         "api_port", "vdom_enabled", "description",
+                         "sched_enabled", "sched_mode", "sched_every_hours",
+                         "sched_time", "sched_weekday")
 
 
 def _device_public(d: Device) -> dict:
@@ -128,6 +136,10 @@ def login(request: Request, master_password: str = Form(...)):
 
     # W cookie ląduje wyłącznie losowy token; hasło zostaje w RAM serwera.
     request.session["token"] = SESSIONS.create(master_password)
+    # Każde udane logowanie uzbraja/odświeża harmonogram automatycznych
+    # backupów (serwer nie trzyma hasła głównego na dysku, więc po
+    # restarcie scheduler śpi do pierwszego logowania).
+    SCHEDULER.arm(master_password)
     return RedirectResponse("/", status_code=HTTP_302_FOUND)
 
 
@@ -138,14 +150,35 @@ def logout(request: Request):
     return RedirectResponse("/login", status_code=HTTP_302_FOUND)
 
 
+def _setup_authorized(request: Request, confirm_password: str = "") -> bool:
+    """Dostęp do zmiany/resetu konfiguracji:
+    (a) aktywna sesja, ALBO
+    (b) znajomość AKTUALNEGO hasła magazynu — ratunek na scenariusz
+        "baza przeniesiona, logowanie niemożliwe, a /setup za sesją".
+    """
+    if SESSIONS.get_master_password(request.session.get("token")):
+        return True
+    settings = load_settings()
+    if not settings.host:
+        return True  # świeża instalacja — setup otwarty
+    if not confirm_password:
+        return False
+    client_ip = request.client.host if request.client else "?"
+    if not LOGIN_LIMITER.allow(client_ip):
+        return False
+    return confirm_password == settings.to_storage_config().password
+
+
 @app.get("/setup", response_class=HTMLResponse)
 def setup_page(request: Request):
     settings = load_settings()
-    # Po pierwszej konfiguracji zmiana magazynu tylko dla zalogowanych
-    if settings.host and not SESSIONS.get_master_password(request.session.get("token")):
-        return RedirectResponse("/login", status_code=HTTP_302_FOUND)
-    return templates.TemplateResponse(request=request, name="setup.html",
-                                      context={"settings": settings})
+    logged = bool(SESSIONS.get_master_password(request.session.get("token")))
+    return templates.TemplateResponse(
+        request=request, name="setup.html",
+        context={"settings": settings,
+                 "configured": bool(settings.host),
+                 "logged": logged,
+                 "error": None})
 
 
 @app.post("/setup")
@@ -157,11 +190,15 @@ def save_setup(
     username: str = Form(...),
     password: str = Form(...),
     base_path: str = Form("/fortibackup"),
+    confirm_password: str = Form(""),
 ):
-    old = load_settings()
-    if old.host and not SESSIONS.get_master_password(request.session.get("token")):
-        raise HTTPException(status_code=HTTP_401_UNAUTHORIZED,
-                            detail="Zmiana konfiguracji wymaga zalogowania")
+    if not _setup_authorized(request, confirm_password):
+        settings = load_settings()
+        return templates.TemplateResponse(
+            request=request, name="setup.html",
+            context={"settings": settings, "configured": True,
+                     "logged": False,
+                     "error": "Błędne aktualne hasło magazynu (albo limit prób — odczekaj minutę)."})
     settings = AppSettings(
         protocol=protocol,
         host=host.strip(),
@@ -171,7 +208,25 @@ def save_setup(
         base_path=base_path.strip() or "/fortibackup",
     )
     save_settings(settings)
+    SCHEDULER.refresh()
     return RedirectResponse("/login", status_code=HTTP_302_FOUND)
+
+
+@app.post("/setup/reset")
+def reset_setup(request: Request, confirm_password: str = Form("")):
+    """Wyczyszczenie konfiguracji magazynu (dane na magazynie zostają
+    nietknięte). Autoryzacja jak przy zmianie setupu."""
+    if not _setup_authorized(request, confirm_password):
+        settings = load_settings()
+        return templates.TemplateResponse(
+            request=request, name="setup.html",
+            context={"settings": settings, "configured": True,
+                     "logged": False,
+                     "error": "Błędne aktualne hasło magazynu (albo limit prób — odczekaj minutę)."})
+    save_settings(AppSettings())      # pusta konfiguracja
+    SCHEDULER.disarm()
+    request.session.clear()
+    return RedirectResponse("/setup", status_code=HTTP_302_FOUND)
 
 
 # ======================== MAIN PAGE ========================
@@ -208,6 +263,11 @@ def add_device(
     api_port: int = Form(443),
     vdom_enabled: bool = Form(False),
     description: str = Form(""),
+    sched_enabled: bool = Form(False),
+    sched_mode: str = Form("daily"),
+    sched_every_hours: int = Form(24),
+    sched_time: str = Form("02:00"),
+    sched_weekday: int = Form(0),
     mp: str = Depends(get_master_password),
 ):
     cfg = get_storage_config()
@@ -218,9 +278,13 @@ def add_device(
             username=username.strip(), password=password, method=method,
             api_token=api_token.strip(), api_port=api_port,
             vdom_enabled=vdom_enabled, description=description.strip(),
+            sched_enabled=sched_enabled, sched_mode=sched_mode,
+            sched_every_hours=sched_every_hours, sched_time=sched_time.strip(),
+            sched_weekday=sched_weekday,
         )
         try:
             db.upsert(device)
+            SCHEDULER.refresh()
             return {"status": "ok", "message": f"Dodano urządzenie: {device.name}"}
         except DeviceDBError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -252,6 +316,11 @@ def update_device(
     api_port: int = Form(443),
     vdom_enabled: bool = Form(False),
     description: str = Form(""),
+    sched_enabled: bool = Form(False),
+    sched_mode: str = Form("daily"),
+    sched_every_hours: int = Form(24),
+    sched_time: str = Form("02:00"),
+    sched_weekday: int = Form(0),
     mp: str = Depends(get_master_password),
 ):
     cfg = get_storage_config()
@@ -268,9 +337,13 @@ def update_device(
             api_token=api_token.strip() or old.api_token,  # puste = bez zmian
             api_port=api_port, vdom_enabled=vdom_enabled,
             description=description.strip(),
+            sched_enabled=sched_enabled, sched_mode=sched_mode,
+            sched_every_hours=sched_every_hours, sched_time=sched_time.strip(),
+            sched_weekday=sched_weekday,
         )
         try:
             db.upsert(device, old_name=name)
+            SCHEDULER.refresh()
             return {"status": "ok", "message": "Urządzenie zaktualizowane"}
         except DeviceDBError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -282,7 +355,15 @@ def delete_device(name: str, mp: str = Depends(get_master_password)):
     with open_storage(cfg) as st:
         db = _load_db(st, mp)
         db.remove(name)
+        SCHEDULER.refresh()
         return {"status": "ok"}
+
+
+# ======================== SCHEDULER ========================
+
+@app.get("/api/scheduler")
+def scheduler_status(mp: str = Depends(get_master_password)):
+    return SCHEDULER.status()
 
 
 # ======================== BACKUP (JOBY) ========================

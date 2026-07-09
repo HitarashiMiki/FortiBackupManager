@@ -38,6 +38,13 @@ class Device:
     api_port: int = 443
     vdom_enabled: bool = False
     description: str = ""
+    # Harmonogram automatycznych backupów (per urządzenie, współdzielony
+    # przez zespół — żyje w zaszyfrowanej bazie na magazynie)
+    sched_enabled: bool = False
+    sched_mode: str = "daily"        # "interval" | "daily" | "weekly"
+    sched_every_hours: int = 24      # dla trybu interval
+    sched_time: str = "02:00"        # dla daily/weekly (HH:MM)
+    sched_weekday: int = 0           # dla weekly (0 = poniedziałek)
 
     def to_dict(self) -> dict:
         return asdict(self)

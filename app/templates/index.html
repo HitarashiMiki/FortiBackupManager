@@ -23,7 +23,14 @@
             <span class="font-bold text-xl">FortiBackup Web</span>
         </div>
         <div class="flex items-center gap-x-4 text-sm">
+            <span id="scheduler-badge" class="px-3 py-1 rounded-full text-xs bg-[#21262d] text-[#8b949e]"
+                  title="Harmonogram automatycznych backupów">
+                <i class="fa-regular fa-clock mr-1"></i>Harmonogram: …
+            </span>
             <span class="text-[#8b949e]">{{ settings_summary }}</span>
+            <a href="/setup" class="text-[#8b949e] hover:text-white" title="Konfiguracja magazynu">
+                <i class="fa-solid fa-gear"></i>
+            </a>
             <a href="/logout" class="flex items-center gap-x-2 hover:text-red-400">
                 <i class="fa-solid fa-sign-out-alt"></i> <span>Wyloguj</span>
             </a>
@@ -153,6 +160,49 @@
                 <div><label class="block text-sm mb-1.5">Opis</label>
                     <input type="text" id="device-description" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5"></div>
 
+                <!-- HARMONOGRAM AUTOMATYCZNYCH BACKUPÓW -->
+                <div class="border border-[#30363d] rounded-xl p-4 space-y-4">
+                    <div class="flex items-center gap-x-3">
+                        <input type="checkbox" id="sched-enabled" onchange="toggleSchedFields()" class="w-4 h-4 accent-[#1f6feb]">
+                        <label for="sched-enabled" class="text-sm font-medium">
+                            <i class="fa-regular fa-clock mr-1"></i>Automatyczne backupy wg harmonogramu
+                        </label>
+                    </div>
+                    <div id="sched-fields" class="hidden space-y-4">
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm mb-1.5">Tryb</label>
+                                <select id="sched-mode" onchange="toggleSchedFields()" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5">
+                                    <option value="daily">Codziennie o godzinie</option>
+                                    <option value="weekly">Co tydzień (dzień + godzina)</option>
+                                    <option value="interval">Co N godzin</option>
+                                </select>
+                            </div>
+                            <div id="sched-hours-box">
+                                <label class="block text-sm mb-1.5">Co ile godzin</label>
+                                <input type="number" id="sched-every-hours" value="24" min="1" max="720" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5">
+                            </div>
+                            <div id="sched-time-box">
+                                <label class="block text-sm mb-1.5">Godzina</label>
+                                <input type="time" id="sched-time" value="02:00" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5">
+                            </div>
+                            <div id="sched-weekday-box">
+                                <label class="block text-sm mb-1.5">Dzień tygodnia</label>
+                                <select id="sched-weekday" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5">
+                                    <option value="0">Poniedziałek</option><option value="1">Wtorek</option>
+                                    <option value="2">Środa</option><option value="3">Czwartek</option>
+                                    <option value="4">Piątek</option><option value="5">Sobota</option>
+                                    <option value="6">Niedziela</option>
+                                </select>
+                            </div>
+                        </div>
+                        <p class="text-xs text-[#8b949e]">
+                            Harmonogram działa, gdy jest uzbrojony (patrz wskaźnik na górnym pasku).
+                            Po restarcie serwera uzbraja się pierwszym logowaniem dowolnego użytkownika.
+                        </p>
+                    </div>
+                </div>
+
                 <div class="flex justify-end gap-x-3 pt-4">
                     <button type="button" onclick="closeDeviceModal()" class="px-5 py-2.5 rounded-lg border border-[#30363d]">Anuluj</button>
                     <button type="submit" class="px-6 py-2.5 bg-[#1f6feb] hover:bg-[#388bfd] rounded-lg font-semibold">Zapisz</button>
@@ -209,7 +259,13 @@
             document.getElementById('device-form').reset();
             document.getElementById('device-old-name').value = '';
             document.getElementById('device-method').value = 'ssh_push';
+            document.getElementById('sched-enabled').checked = false;
+            document.getElementById('sched-mode').value = 'daily';
+            document.getElementById('sched-every-hours').value = 24;
+            document.getElementById('sched-time').value = '02:00';
+            document.getElementById('sched-weekday').value = '0';
             toggleApiFields();
+            toggleSchedFields();
             document.getElementById('device-modal').classList.remove('hidden');
             document.getElementById('device-modal').classList.add('flex');
         }
@@ -232,8 +288,14 @@
             document.getElementById('device-api-port').value = device.api_port || 443;
             document.getElementById('device-vdom').checked = !!device.vdom_enabled;
             document.getElementById('device-description').value = device.description || '';
+            document.getElementById('sched-enabled').checked = !!device.sched_enabled;
+            document.getElementById('sched-mode').value = device.sched_mode || 'daily';
+            document.getElementById('sched-every-hours').value = device.sched_every_hours || 24;
+            document.getElementById('sched-time').value = device.sched_time || '02:00';
+            document.getElementById('sched-weekday').value = String(device.sched_weekday ?? 0);
 
             toggleApiFields();
+            toggleSchedFields();
             document.getElementById('device-modal').classList.remove('hidden');
             document.getElementById('device-modal').classList.add('flex');
         }
@@ -241,6 +303,40 @@
         function toggleApiFields() {
             const method = document.getElementById('device-method').value;
             document.getElementById('api-fields').classList.toggle('hidden', method !== 'api_pull');
+        }
+
+        function toggleSchedFields() {
+            const on = document.getElementById('sched-enabled').checked;
+            document.getElementById('sched-fields').classList.toggle('hidden', !on);
+            const mode = document.getElementById('sched-mode').value;
+            document.getElementById('sched-hours-box').classList.toggle('hidden', mode !== 'interval');
+            document.getElementById('sched-time-box').classList.toggle('hidden', mode === 'interval');
+            document.getElementById('sched-weekday-box').classList.toggle('hidden', mode !== 'weekly');
+        }
+
+        // ==================== HARMONOGRAM ====================
+        let schedulerNextRuns = {};
+
+        async function refreshSchedulerBadge() {
+            try {
+                const res = await fetch('/api/scheduler');
+                if (!res.ok) return;
+                const s = await res.json();
+                schedulerNextRuns = s.next_runs || {};
+                const badge = document.getElementById('scheduler-badge');
+                const n = Object.keys(schedulerNextRuns).length;
+                if (s.armed) {
+                    badge.className = 'px-3 py-1 rounded-full text-xs bg-[#12361f] text-[#3fb950]';
+                    badge.innerHTML = `<i class="fa-regular fa-clock mr-1"></i>Harmonogram: aktywny (${n} urz.)`;
+                    badge.title = Object.entries(schedulerNextRuns)
+                        .map(([k, v]) => `${k}: ${v.replace('T', ' ')}`).join('\n') || 'Brak urządzeń z harmonogramem';
+                } else {
+                    badge.className = 'px-3 py-1 rounded-full text-xs bg-[#3c2a13] text-[#d29922]';
+                    badge.innerHTML = `<i class="fa-regular fa-clock mr-1"></i>Harmonogram: uśpiony`;
+                    badge.title = 'Uzbroi się po pierwszym logowaniu po restarcie serwera';
+                }
+                if (s.last_error) addLog(`Harmonogram: ${s.last_error}`, 'error');
+            } catch (e) { /* ignoruj */ }
         }
 
         function closeDeviceModal() {
@@ -261,6 +357,11 @@
             formData.append('api_port', document.getElementById('device-api-port').value);
             formData.append('vdom_enabled', document.getElementById('device-vdom').checked);
             formData.append('description', document.getElementById('device-description').value);
+            formData.append('sched_enabled', document.getElementById('sched-enabled').checked);
+            formData.append('sched_mode', document.getElementById('sched-mode').value);
+            formData.append('sched_every_hours', document.getElementById('sched-every-hours').value);
+            formData.append('sched_time', document.getElementById('sched-time').value);
+            formData.append('sched_weekday', document.getElementById('sched-weekday').value);
 
             const oldName = document.getElementById('device-old-name').value;
             let url = '/api/devices';
@@ -396,9 +497,13 @@
                 const div = document.createElement('div');
                 div.className = `group px-3 py-3 rounded-xl mb-1 flex justify-between items-center hover:bg-[#161b22] cursor-pointer ${currentDevice === device.name ? 'bg-[#1f6feb] text-white' : ''}`;
 
+                const schedIcon = device.sched_enabled
+                    ? `<i class="fa-regular fa-clock text-xs ml-1 ${currentDevice === device.name ? 'text-white/80' : 'text-[#3fb950]'}"
+                          title="Harmonogram aktywny${schedulerNextRuns[device.name] ? ' • następny: ' + schedulerNextRuns[device.name].replace('T',' ') : ''}"></i>`
+                    : '';
                 div.innerHTML = `
                     <div onclick="selectDevice(${JSON.stringify(device).replace(/"/g, '&quot;')})" class="flex-1 min-w-0">
-                        <div class="font-medium truncate">${device.name}</div>
+                        <div class="font-medium truncate">${device.name}${schedIcon}</div>
                         <div class="text-xs ${currentDevice === device.name ? 'text-white/70' : 'text-[#8b949e]'} truncate">${device.host}</div>
                     </div>
                     <div class="flex gap-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -470,7 +575,8 @@
         // Inicjalizacja
         window.onload = function() {
             addLog("Aplikacja uruchomiona");
-            loadDevices();
+            refreshSchedulerBadge().then(loadDevices);
+            setInterval(refreshSchedulerBadge, 60000);
         }
     </script>
 </body>
