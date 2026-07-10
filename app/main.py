@@ -31,14 +31,16 @@ import threading
 from typing import Optional
 
 from fastapi import FastAPI, Request, Form, HTTPException, Depends
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, PlainTextResponse
+from fastapi.responses import (HTMLResponse, RedirectResponse, StreamingResponse,
+                               PlainTextResponse, JSONResponse)
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.status import HTTP_302_FOUND, HTTP_401_UNAUTHORIZED
 
 from .config import load_settings, save_settings, AppSettings, _obf
 from .storage import open_storage, StorageConfig, StorageError
-from .devicedb import DeviceDB, Device, WrongPasswordError, DeviceDBError
+from .devicedb import (DeviceDB, Device, WrongPasswordError, DeviceDBError,
+                       DBTooNewError)
 from .fortigate import run_backup, device_backup_dir
 from .diff import make_diff_html
 from .security import (SESSIONS, LOGIN_LIMITER, get_or_create_secret,
@@ -47,6 +49,13 @@ from .jobs import JOBS
 from .scheduler import SCHEDULER
 
 app = FastAPI(title="FortiBackup Web", docs_url=None, redoc_url=None)
+
+
+@app.exception_handler(DBTooNewError)
+def _db_too_new_handler(request: Request, exc: DBTooNewError):
+    # 426 Upgrade Required — jeden punkt obsługi dla WSZYSTKICH endpointów
+    # API: baza zapisana przez nowszą wersję programu, potrzebny update.
+    return JSONResponse(status_code=426, content={"detail": str(exc)})
 
 
 @app.on_event("startup")
@@ -64,7 +73,7 @@ templates = Jinja2Templates(directory="app/templates")
 
 # Pola urządzenia bezpieczne do wysłania do przeglądarki (BEZ sekretów)
 _DEVICE_PUBLIC_FIELDS = ("name", "host", "port", "username", "method",
-                         "api_port", "vdom_enabled", "description",
+                         "api_port", "vdom_enabled", "description", "folder",
                          "sched_enabled", "sched_mode", "sched_every_hours",
                          "sched_time", "sched_weekday")
 
@@ -88,7 +97,7 @@ def get_master_password(request: Request) -> str:
 def get_storage_config() -> StorageConfig:
     settings = load_settings()
     if not settings.host:
-        raise HTTPException(status_code=400, detail="Magazyn nie jest skonfigurowany")
+        raise HTTPException(status_code=400, detail="Baza danych nie jest skonfigurowana")
     return settings.to_storage_config()
 
 
@@ -119,7 +128,7 @@ def login(request: Request, master_password: str = Form(...)):
     if not LOGIN_LIMITER.allow(client_ip):
         return templates.TemplateResponse(
             request=request, name="login.html",
-            context={"error": "Za dużo prób logowania — odczekaj minutę."})
+            context={"error": "Zbyt dużo prób logowania z tego adresu — odczekaj minutę."})
 
     try:
         cfg = settings.to_storage_config()
@@ -128,7 +137,13 @@ def login(request: Request, master_password: str = Form(...)):
     except WrongPasswordError:
         return templates.TemplateResponse(
             request=request, name="login.html",
-            context={"error": "Błędne hasło główne"})
+            context={"error": "Błędne hasło bazy danych"})
+    except DBTooNewError as e:
+        # Drugie (obok API/426) miejsce powiadomienia: już przy logowaniu,
+        # zanim ktokolwiek zdąży cokolwiek zapisać do bazy.
+        return templates.TemplateResponse(
+            request=request, name="login.html",
+            context={"error": str(e)})
     except Exception as e:  # noqa: BLE001
         return templates.TemplateResponse(
             request=request, name="login.html",
@@ -198,7 +213,7 @@ def save_setup(
             request=request, name="setup.html",
             context={"settings": settings, "configured": True,
                      "logged": False,
-                     "error": "Błędne aktualne hasło magazynu (albo limit prób — odczekaj minutę)."})
+                     "error": "Błędne aktualne hasło bazy danych (albo limit prób — odczekaj minutę)."})
     settings = AppSettings(
         protocol=protocol,
         host=host.strip(),
@@ -222,7 +237,7 @@ def reset_setup(request: Request, confirm_password: str = Form("")):
             request=request, name="setup.html",
             context={"settings": settings, "configured": True,
                      "logged": False,
-                     "error": "Błędne aktualne hasło magazynu (albo limit prób — odczekaj minutę)."})
+                     "error": "Błędne aktualne hasło bazy danych (albo limit prób — odczekaj minutę)."})
     save_settings(AppSettings())      # pusta konfiguracja
     SCHEDULER.disarm()
     request.session.clear()
@@ -248,7 +263,15 @@ def list_devices(mp: str = Depends(get_master_password)):
     cfg = get_storage_config()
     with open_storage(cfg) as st:
         db = _load_db(st, mp)
-        return {"devices": [_device_public(d) for d in db.devices]}
+        return {"devices": [_device_public(d) for d in db.devices],
+                "folders": db.folders}
+
+
+def _validate_folder(db: DeviceDB, folder: str) -> str:
+    folder = folder.strip()
+    if folder and folder not in db.folders:
+        raise HTTPException(status_code=400, detail=f"Folder '{folder}' nie istnieje")
+    return folder
 
 
 @app.post("/api/devices")
@@ -263,6 +286,7 @@ def add_device(
     api_port: int = Form(443),
     vdom_enabled: bool = Form(False),
     description: str = Form(""),
+    folder: str = Form(""),
     sched_enabled: bool = Form(False),
     sched_mode: str = Form("daily"),
     sched_every_hours: int = Form(24),
@@ -278,6 +302,7 @@ def add_device(
             username=username.strip(), password=password, method=method,
             api_token=api_token.strip(), api_port=api_port,
             vdom_enabled=vdom_enabled, description=description.strip(),
+            folder=_validate_folder(db, folder),
             sched_enabled=sched_enabled, sched_mode=sched_mode,
             sched_every_hours=sched_every_hours, sched_time=sched_time.strip(),
             sched_weekday=sched_weekday,
@@ -316,6 +341,7 @@ def update_device(
     api_port: int = Form(443),
     vdom_enabled: bool = Form(False),
     description: str = Form(""),
+    folder: str = Form(""),
     sched_enabled: bool = Form(False),
     sched_mode: str = Form("daily"),
     sched_every_hours: int = Form(24),
@@ -337,6 +363,8 @@ def update_device(
             api_token=api_token.strip() or old.api_token,  # puste = bez zmian
             api_port=api_port, vdom_enabled=vdom_enabled,
             description=description.strip(),
+            folder=_validate_folder(db, folder),
+            extra=old.extra,   # nieznane pola nowszych wersji — nie wycinaj
             sched_enabled=sched_enabled, sched_mode=sched_mode,
             sched_every_hours=sched_every_hours, sched_time=sched_time.strip(),
             sched_weekday=sched_weekday,
@@ -351,12 +379,57 @@ def update_device(
 
 @app.delete("/api/devices/{name}")
 def delete_device(name: str, mp: str = Depends(get_master_password)):
+    """Usuwa urządzenie z bazy. Backupy na magazynie zostają nietknięte —
+    świadomie: kopie konfiguracji to ostatnia rzecz, którą chcemy kasować
+    kaskadowo."""
     cfg = get_storage_config()
     with open_storage(cfg) as st:
         db = _load_db(st, mp)
         db.remove(name)
         SCHEDULER.refresh()
-        return {"status": "ok"}
+        return {"status": "ok", "message": f"Usunięto urządzenie: {name}"}
+
+
+@app.post("/api/devices/{name}/move")
+def move_device(name: str, folder: str = Form(""),
+                mp: str = Depends(get_master_password)):
+    cfg = get_storage_config()
+    with open_storage(cfg) as st:
+        db = _load_db(st, mp)
+        try:
+            db.move_device(name, folder)
+        except DeviceDBError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        target = folder.strip() or "poza foldery"
+        return {"status": "ok", "message": f"Przeniesiono '{name}' → {target}"}
+
+
+# ======================== FOLDERY ========================
+
+@app.post("/api/folders")
+def add_folder(name: str = Form(...), mp: str = Depends(get_master_password)):
+    cfg = get_storage_config()
+    with open_storage(cfg) as st:
+        db = _load_db(st, mp)
+        try:
+            db.add_folder(name)
+        except DeviceDBError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {"status": "ok", "message": f"Utworzono folder: {name.strip()}"}
+
+
+@app.delete("/api/folders/{name}")
+def delete_folder(name: str, mp: str = Depends(get_master_password)):
+    """Usuwa folder; urządzenia z niego lądują poza folderami."""
+    cfg = get_storage_config()
+    with open_storage(cfg) as st:
+        db = _load_db(st, mp)
+        try:
+            moved = db.remove_folder(name)
+        except DeviceDBError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {"status": "ok",
+                "message": f"Usunięto folder '{name}' ({moved} urz. przeniesionych poza foldery)"}
 
 
 # ======================== SCHEDULER ========================
