@@ -28,7 +28,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from .config import load_settings
-from .storage import open_storage
+from .storage import open_storage, open_db_storage
 from .devicedb import DeviceDB, Device
 from .fortigate import run_backup
 from .jobs import JOBS
@@ -154,10 +154,9 @@ class Scheduler:
 
     def _reload_devices(self, mp: str) -> None:
         try:
-            cfg = load_settings().to_storage_config()
-            if not cfg.host:
-                return
-            with open_storage(cfg) as st:
+            # baza urządzeń żyje lokalnie w /DB — magazyn FTP/SFTP jest
+            # potrzebny dopiero przy samym backupie (_run_scheduled)
+            with open_db_storage() as st:
                 db = DeviceDB(st, mp)
                 db.load_or_create()
                 devices = list(db.devices)

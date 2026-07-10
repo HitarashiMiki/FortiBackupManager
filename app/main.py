@@ -38,9 +38,9 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.status import HTTP_302_FOUND, HTTP_401_UNAUTHORIZED
 
 from .config import load_settings, save_settings, AppSettings, _obf
-from .storage import open_storage, StorageConfig, StorageError
+from .storage import open_storage, open_db_storage, StorageConfig, StorageError
 from .devicedb import (DeviceDB, Device, WrongPasswordError, DeviceDBError,
-                       DBTooNewError)
+                       DBTooNewError, DB_FILENAME)
 from .fortigate import run_backup, device_backup_dir
 from .diff import make_diff_html
 from .security import (SESSIONS, LOGIN_LIMITER, get_or_create_secret,
@@ -97,7 +97,7 @@ def get_master_password(request: Request) -> str:
 def get_storage_config() -> StorageConfig:
     settings = load_settings()
     if not settings.host:
-        raise HTTPException(status_code=400, detail="Baza danych nie jest skonfigurowana")
+        raise HTTPException(status_code=400, detail="Magazyn backupów nie jest skonfigurowany")
     return settings.to_storage_config()
 
 
@@ -105,6 +105,24 @@ def _load_db(st, mp: str) -> DeviceDB:
     db = DeviceDB(st, mp)
     db.load_or_create()
     return db
+
+
+def _migrate_db_from_remote(settings: AppSettings, dbst, local_path: str) -> None:
+    """Jednorazowa migracja: baza urządzeń mieszkała kiedyś na magazynie
+    FTP/SFTP. Jeśli lokalnie (/DB) jej nie ma, a na magazynie jest —
+    kopiujemy, żeby logowanie nie założyło pustej bazy 'obok' istniejącej.
+    Kopia na magazynie zostaje nietknięta (awaryjny backup)."""
+    try:
+        with open_storage(settings.to_storage_config()) as rst:
+            remote_path = rst.join(DB_FILENAME)
+            if rst.exists(remote_path):
+                dbst.upload_bytes(rst.download_bytes(remote_path), local_path)
+    except StorageError as e:
+        # Nie twórz po cichu pustej bazy, skoro na magazynie może istnieć
+        # pełna — lepiej zablokować logowanie czytelnym komunikatem.
+        raise DeviceDBError(
+            f"Brak lokalnej bazy w /DB, a migracja z magazynu nie powiodła się: {e}")
+
 
 
 # ======================== AUTH + SETUP ========================
@@ -131,9 +149,11 @@ def login(request: Request, master_password: str = Form(...)):
             context={"error": "Zbyt dużo prób logowania z tego adresu — odczekaj minutę."})
 
     try:
-        cfg = settings.to_storage_config()
-        with open_storage(cfg) as st:
-            _load_db(st, master_password)
+        with open_db_storage() as dbst:
+            local_path = dbst.join(DB_FILENAME)
+            if not dbst.exists(local_path):
+                _migrate_db_from_remote(settings, dbst, local_path)
+            _load_db(dbst, master_password)
     except WrongPasswordError:
         return templates.TemplateResponse(
             request=request, name="login.html",
@@ -141,6 +161,10 @@ def login(request: Request, master_password: str = Form(...)):
     except DBTooNewError as e:
         # Drugie (obok API/426) miejsce powiadomienia: już przy logowaniu,
         # zanim ktokolwiek zdąży cokolwiek zapisać do bazy.
+        return templates.TemplateResponse(
+            request=request, name="login.html",
+            context={"error": str(e)})
+    except DeviceDBError as e:
         return templates.TemplateResponse(
             request=request, name="login.html",
             context={"error": str(e)})
@@ -213,7 +237,7 @@ def save_setup(
             request=request, name="setup.html",
             context={"settings": settings, "configured": True,
                      "logged": False,
-                     "error": "Błędne aktualne hasło bazy danych (albo limit prób — odczekaj minutę)."})
+                     "error": "Błędne aktualne hasło magazynu backupów (albo limit prób — odczekaj minutę)."})
     settings = AppSettings(
         protocol=protocol,
         host=host.strip(),
@@ -260,8 +284,7 @@ def dashboard(request: Request):
 
 @app.get("/api/devices")
 def list_devices(mp: str = Depends(get_master_password)):
-    cfg = get_storage_config()
-    with open_storage(cfg) as st:
+    with open_db_storage() as st:
         db = _load_db(st, mp)
         return {"devices": [_device_public(d) for d in db.devices],
                 "folders": db.folders}
@@ -294,8 +317,7 @@ def add_device(
     sched_weekday: int = Form(0),
     mp: str = Depends(get_master_password),
 ):
-    cfg = get_storage_config()
-    with open_storage(cfg) as st:
+    with open_db_storage() as st:
         db = _load_db(st, mp)
         device = Device(
             name=name.strip(), host=host.strip(), port=port,
@@ -317,8 +339,7 @@ def add_device(
 
 @app.get("/api/devices/{name}")
 def get_device(name: str, mp: str = Depends(get_master_password)):
-    cfg = get_storage_config()
-    with open_storage(cfg) as st:
+    with open_db_storage() as st:
         db = _load_db(st, mp)
         device = db.get(name)
         if not device:
@@ -349,8 +370,7 @@ def update_device(
     sched_weekday: int = Form(0),
     mp: str = Depends(get_master_password),
 ):
-    cfg = get_storage_config()
-    with open_storage(cfg) as st:
+    with open_db_storage() as st:
         db = _load_db(st, mp)
         old = db.get(name)
         if not old:
@@ -382,8 +402,7 @@ def delete_device(name: str, mp: str = Depends(get_master_password)):
     """Usuwa urządzenie z bazy. Backupy na magazynie zostają nietknięte —
     świadomie: kopie konfiguracji to ostatnia rzecz, którą chcemy kasować
     kaskadowo."""
-    cfg = get_storage_config()
-    with open_storage(cfg) as st:
+    with open_db_storage() as st:
         db = _load_db(st, mp)
         db.remove(name)
         SCHEDULER.refresh()
@@ -393,8 +412,7 @@ def delete_device(name: str, mp: str = Depends(get_master_password)):
 @app.post("/api/devices/{name}/move")
 def move_device(name: str, folder: str = Form(""),
                 mp: str = Depends(get_master_password)):
-    cfg = get_storage_config()
-    with open_storage(cfg) as st:
+    with open_db_storage() as st:
         db = _load_db(st, mp)
         try:
             db.move_device(name, folder)
@@ -421,8 +439,7 @@ def add_folder(name: str = Form(...), mp: str = Depends(get_master_password)):
 @app.delete("/api/folders/{name}")
 def delete_folder(name: str, mp: str = Depends(get_master_password)):
     """Usuwa folder; urządzenia z niego lądują poza folderami."""
-    cfg = get_storage_config()
-    with open_storage(cfg) as st:
+    with open_db_storage() as st:
         db = _load_db(st, mp)
         try:
             moved = db.remove_folder(name)
@@ -445,8 +462,10 @@ def _run_backup_job(job, cfg: StorageConfig, mp: str, device_names: Optional[lis
     """Wątek roboczy: backup jednego lub wszystkich urządzeń, log do joba."""
     ok = True
     try:
+        # baza urządzeń lokalnie (/DB), same backupy na zdalnym magazynie
+        with open_db_storage() as dbst:
+            db = _load_db(dbst, mp)
         with open_storage(cfg) as st:
-            db = _load_db(st, mp)
             targets = ([d for d in db.devices if d.name in device_names]
                        if device_names else list(db.devices))
             if not targets:
