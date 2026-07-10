@@ -3,14 +3,16 @@
 storage.py — warstwa dostępu do zdalnego magazynu kopii zapasowych.
 
 Obsługiwane protokoły: SFTP (paramiko) oraz FTP / FTPS (ftplib).
-Wszystkie dane programu (backupy + zaszyfrowana baza urządzeń) żyją
-wyłącznie na tym zdalnym zasobie — nic nie jest trzymane lokalnie.
+Na zdalnym zasobie żyją WYŁĄCZNIE backupy konfiguracji. Zaszyfrowana
+baza urządzeń mieszka lokalnie w kontenerze (stały katalog /DB,
+montowany jako wolumen z hosta) — patrz open_db_storage().
 """
 
 from __future__ import annotations
 
 import ftplib
 import io
+import os
 import posixpath
 import socket
 import stat
@@ -385,12 +387,19 @@ class LocalStorage(RemoteStorage):
         return Path(path).is_file()
 
 
-def open_local_db_storage() -> "LocalStorage":
-    """Lokalny magazyn na bazę urządzeń: ~/.fortibackup/"""
-    from pathlib import Path
-    cfg = StorageConfig(protocol="local",
-                        base_path=str(Path.home() / ".fortibackup"))
-    return LocalStorage(cfg)
+# Stałe miejsce bazy urządzeń w kontenerze — docker-compose montuje tu
+# katalog z hosta (np. ./db:/DB). Env FORTIBACKUP_DB_DIR pozwala nadpisać
+# ścieżkę przy developmencie poza dockerem (na Windows /DB = C:\DB).
+DB_DIR_DEFAULT = "/DB"
+
+
+def open_db_storage() -> "LocalStorage":
+    """Lokalny magazyn bazy urządzeń (devices.db). Baza pozostaje
+    zaszyfrowana hasłem głównym — wolumen na hoście nie zawiera sekretów
+    w postaci jawnej."""
+    base = os.environ.get("FORTIBACKUP_DB_DIR", DB_DIR_DEFAULT)
+    return LocalStorage(StorageConfig(protocol="local", base_path=base))
+
 
 
 # --------------------------------------------------------------------------- #
