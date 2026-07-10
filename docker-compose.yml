@@ -8,6 +8,8 @@ services:
       - "8080:8000"
     volumes:
       - fortibackup-data:/root/.fortibackup-web
+      # Path to your database folder /folder/on/host:/DB
+      - ./db:/DB
     environment:
       - TZ=Europe/Warsaw
     restart: unless-stopped

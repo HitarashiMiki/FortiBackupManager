@@ -62,7 +62,7 @@ class Device:
     vdom_enabled: bool = False
     description: str = ""
     # Harmonogram automatycznych backupów (per urządzenie, współdzielony
-    # przez zespół — żyje w zaszyfrowanej bazie na magazynie)
+    # przez zespół — żyje w zaszyfrowanej bazie urządzeń)
     sched_enabled: bool = False
     sched_mode: str = "daily"        # "interval" | "daily" | "weekly"
     sched_every_hours: int = 24      # dla trybu interval
@@ -164,7 +164,7 @@ class DeviceDB:
         self._salt: Optional[bytes] = None
 
     @property
-    def remote_path(self) -> str:
+    def db_path(self) -> str:
         return self.storage.join(DB_FILENAME)
 
     def _ingest(self, blob: bytes) -> None:
@@ -179,8 +179,8 @@ class DeviceDB:
 
     def load_or_create(self) -> bool:
         self.storage.ensure_dir(self.storage.cfg.base_path)
-        if self.storage.exists(self.remote_path):
-            blob = self.storage.download_bytes(self.remote_path)
+        if self.storage.exists(self.db_path):
+            blob = self.storage.download_bytes(self.db_path)
             self._ingest(blob)
             self._salt = blob[len(MAGIC):len(MAGIC) + SALT_LEN]
             return True
@@ -194,11 +194,11 @@ class DeviceDB:
                           folders=self.folders, extra=self._extra)
         if self._salt is None:
             self._salt = blob[len(MAGIC):len(MAGIC) + SALT_LEN]
-        self.storage.upload_bytes(blob, self.remote_path)
+        self.storage.upload_bytes(blob, self.db_path)
 
     def reload(self) -> None:
-        if self.storage.exists(self.remote_path):
-            blob = self.storage.download_bytes(self.remote_path)
+        if self.storage.exists(self.db_path):
+            blob = self.storage.download_bytes(self.db_path)
             self._ingest(blob)
 
     def get(self, name: str) -> Optional[Device]:
