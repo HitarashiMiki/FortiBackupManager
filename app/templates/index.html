@@ -37,27 +37,15 @@
         </div>
     </nav>
 
-    <!-- Baner: baza zapisana przez nowszą wersję programu -->
-    <div id="db-version-banner" class="hidden bg-[#3c1618] text-[#ff7b72] border-b border-[#f8514933] px-6 py-3 text-sm flex-shrink-0">
-        <i class="fa-solid fa-triangle-exclamation mr-2"></i>
-        <span id="db-version-banner-text"></span>
-    </div>
-
     <div class="flex flex-1 overflow-hidden">
         <!-- Sidebar -->
         <div class="w-80 border-r border-[#30363d] bg-[#010409] flex flex-col">
             <div class="p-4 border-b border-[#30363d] flex justify-between items-center">
                 <span class="font-semibold text-lg">Urządzenia</span>
-                <div class="flex gap-x-2">
-                    <button onclick="createFolder()" title="Nowy folder"
-                            class="bg-[#21262d] border border-[#30363d] hover:bg-[#30363d] px-3 py-1.5 rounded-lg text-sm">
-                        <i class="fa-solid fa-folder-plus"></i>
-                    </button>
-                    <button onclick="showAddDeviceModal()"
-                            class="bg-[#1f6feb] hover:bg-[#388bfd] px-3 py-1.5 rounded-lg text-sm flex items-center gap-x-2">
-                        <i class="fa-solid fa-plus"></i> <span>Dodaj</span>
-                    </button>
-                </div>
+                <button onclick="showAddDeviceModal()"
+                        class="bg-[#1f6feb] hover:bg-[#388bfd] px-3 py-1.5 rounded-lg text-sm flex items-center gap-x-2">
+                    <i class="fa-solid fa-plus"></i> <span>Dodaj</span>
+                </button>
             </div>
             <div id="devices-list" class="flex-1 overflow-auto p-2">
             </div>
@@ -169,12 +157,8 @@
                     <label for="device-vdom" class="text-sm">Urządzenie ma włączone VDOM-y</label>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4">
-                    <div><label class="block text-sm mb-1.5">Opis</label>
-                        <input type="text" id="device-description" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5"></div>
-                    <div><label class="block text-sm mb-1.5">Folder</label>
-                        <select id="device-folder" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5"></select></div>
-                </div>
+                <div><label class="block text-sm mb-1.5">Opis</label>
+                    <input type="text" id="device-description" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5"></div>
 
                 <!-- HARMONOGRAM AUTOMATYCZNYCH BACKUPÓW -->
                 <div class="border border-[#30363d] rounded-xl p-4 space-y-4">
@@ -250,47 +234,9 @@
         </div>
     </div>
 
-    <!-- MODAL PRZENOSZENIA URZĄDZENIA DO FOLDERU -->
-    <div id="move-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-        <div class="bg-[#161b22] border border-[#30363d] rounded-2xl w-full max-w-sm modal">
-            <div class="flex justify-between items-center px-6 py-4 border-b border-[#30363d]">
-                <h3 class="text-lg font-semibold"><i class="fa-solid fa-folder-open mr-2 text-[#1f6feb]"></i>Przenieś urządzenie</h3>
-                <button onclick="closeMoveModal()" class="text-3xl leading-none">&times;</button>
-            </div>
-            <div class="p-6 space-y-4">
-                <p class="text-sm text-[#8b949e]">Urządzenie: <span id="move-device-label" class="text-white font-medium"></span></p>
-                <div>
-                    <label class="block text-sm mb-1.5">Folder docelowy</label>
-                    <select id="move-folder-select" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5"></select>
-                </div>
-                <div class="flex justify-end gap-x-3 pt-2">
-                    <button type="button" onclick="closeMoveModal()" class="px-5 py-2.5 rounded-lg border border-[#30363d]">Anuluj</button>
-                    <button type="button" onclick="submitMove()" class="px-6 py-2.5 bg-[#1f6feb] hover:bg-[#388bfd] rounded-lg font-semibold">Przenieś</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <script>
         let currentDevice = null;
         let isEditMode = false;
-        let allFolders = [];
-        // zwinięte foldery pamiętane per przeglądarka
-        let collapsedFolders = new Set(JSON.parse(localStorage.getItem('fbk-collapsed-folders') || '[]'));
-
-        // 426 Upgrade Required = baza zapisana przez nowszą wersję programu.
-        // Pokazujemy trwały baner — dalsza praca grozi obcięciem danych.
-        let dbVersionWarned = false;
-        function handleDbTooNew(res) {
-            if (res.status !== 426) return false;
-            res.json().then(err => {
-                const msg = err.detail || 'Baza urządzeń wymaga nowszej wersji programu — zaktualizuj FortiBackup Web.';
-                document.getElementById('db-version-banner-text').textContent = msg;
-                document.getElementById('db-version-banner').classList.remove('hidden');
-                if (!dbVersionWarned) { addLog(msg, 'error'); dbVersionWarned = true; }
-            }).catch(() => {});
-            return true;
-        }
 
         function addLog(msg, type = 'info') {
             const container = document.getElementById('log-container');
@@ -307,30 +253,12 @@
         }
 
         // ==================== MODAL URZĄDZENIA ====================
-        // Wypełnia <select> listą folderów (+ opcja "poza folderami")
-        function fillFolderSelect(selectId, selected) {
-            const sel = document.getElementById(selectId);
-            sel.innerHTML = '';
-            const root = document.createElement('option');
-            root.value = '';
-            root.textContent = '— bez folderu —';
-            sel.appendChild(root);
-            allFolders.forEach(f => {
-                const opt = document.createElement('option');
-                opt.value = f;
-                opt.textContent = f;
-                sel.appendChild(opt);
-            });
-            sel.value = allFolders.includes(selected) ? selected : '';
-        }
-
         function showAddDeviceModal() {
             isEditMode = false;
             document.getElementById('modal-title').textContent = 'Dodaj urządzenie';
             document.getElementById('device-form').reset();
             document.getElementById('device-old-name').value = '';
             document.getElementById('device-method').value = 'ssh_push';
-            fillFolderSelect('device-folder', '');
             document.getElementById('sched-enabled').checked = false;
             document.getElementById('sched-mode').value = 'daily';
             document.getElementById('sched-every-hours').value = 24;
@@ -360,7 +288,6 @@
             document.getElementById('device-api-port').value = device.api_port || 443;
             document.getElementById('device-vdom').checked = !!device.vdom_enabled;
             document.getElementById('device-description').value = device.description || '';
-            fillFolderSelect('device-folder', device.folder || '');
             document.getElementById('sched-enabled').checked = !!device.sched_enabled;
             document.getElementById('sched-mode').value = device.sched_mode || 'daily';
             document.getElementById('sched-every-hours').value = device.sched_every_hours || 24;
@@ -430,7 +357,6 @@
             formData.append('api_port', document.getElementById('device-api-port').value);
             formData.append('vdom_enabled', document.getElementById('device-vdom').checked);
             formData.append('description', document.getElementById('device-description').value);
-            formData.append('folder', document.getElementById('device-folder').value);
             formData.append('sched_enabled', document.getElementById('sched-enabled').checked);
             formData.append('sched_mode', document.getElementById('sched-mode').value);
             formData.append('sched_every_hours', document.getElementById('sched-every-hours').value);
@@ -551,211 +477,50 @@
             modal.classList.add('hidden');
         }
 
-        // ==================== LISTA URZĄDZEŃ (Z FOLDERAMI) ====================
-        // Wiersze budowane przez createElement + closures (nie innerHTML
-        // z onclick) — nazwy folderów/urządzeń mogą zawierać dowolne znaki.
-        function renderDeviceRow(device, indented) {
-            const selected = currentDevice === device.name;
-            const div = document.createElement('div');
-            div.className = `group px-3 py-3 rounded-xl mb-1 flex justify-between items-center hover:bg-[#161b22] cursor-pointer ${indented ? 'ml-4' : ''} ${selected ? 'bg-[#1f6feb] text-white' : ''}`;
-
-            const info = document.createElement('div');
-            info.className = 'flex-1 min-w-0';
-            info.onclick = () => selectDevice(device);
-
-            const nameDiv = document.createElement('div');
-            nameDiv.className = 'font-medium truncate';
-            nameDiv.textContent = device.name;
-            if (device.sched_enabled) {
-                const icon = document.createElement('i');
-                icon.className = `fa-regular fa-clock text-xs ml-1 ${selected ? 'text-white/80' : 'text-[#3fb950]'}`;
-                icon.title = 'Harmonogram aktywny' + (schedulerNextRuns[device.name] ? ' • następny: ' + schedulerNextRuns[device.name].replace('T', ' ') : '');
-                nameDiv.appendChild(icon);
-            }
-            const hostDiv = document.createElement('div');
-            hostDiv.className = `text-xs ${selected ? 'text-white/70' : 'text-[#8b949e]'} truncate`;
-            hostDiv.textContent = device.host;
-            info.append(nameDiv, hostDiv);
-
-            const actions = document.createElement('div');
-            actions.className = 'flex gap-x-1 opacity-0 group-hover:opacity-100 transition-opacity';
-            const mkBtn = (iconCls, title, hoverCls, fn) => {
-                const b = document.createElement('button');
-                b.className = `px-2 py-1 text-[#8b949e] ${hoverCls}`;
-                b.title = title;
-                b.innerHTML = `<i class="fa-solid ${iconCls}"></i>`;
-                b.onclick = (e) => { e.stopPropagation(); fn(); };
-                return b;
-            };
-            actions.append(
-                mkBtn('fa-folder-open', 'Przenieś do folderu', 'hover:text-white', () => showMoveModal(device)),
-                mkBtn('fa-edit', 'Edytuj', 'hover:text-white', () => showEditDeviceModal(device.name)),
-                mkBtn('fa-trash', 'Usuń urządzenie', 'hover:text-red-400', () => deleteDevice(device.name)),
-            );
-
-            div.append(info, actions);
-            return div;
-        }
-
-        function renderFolderHeader(folder, count) {
-            const collapsed = collapsedFolders.has(folder);
-            const div = document.createElement('div');
-            div.className = 'group px-3 py-2 rounded-lg mb-1 flex justify-between items-center hover:bg-[#161b22] cursor-pointer select-none';
-
-            const label = document.createElement('div');
-            label.className = 'flex items-center gap-x-2 flex-1 min-w-0 text-sm font-medium';
-            label.innerHTML = `<i class="fa-solid fa-chevron-${collapsed ? 'right' : 'down'} text-xs text-[#8b949e] w-3"></i>
-                               <i class="fa-solid fa-folder${collapsed ? '' : '-open'} text-[#d29922]"></i>`;
-            const nameSpan = document.createElement('span');
-            nameSpan.className = 'truncate';
-            nameSpan.textContent = folder;
-            const countSpan = document.createElement('span');
-            countSpan.className = 'text-xs text-[#8b949e]';
-            countSpan.textContent = `(${count})`;
-            label.append(nameSpan, countSpan);
-
-            const del = document.createElement('button');
-            del.className = 'px-2 py-1 text-[#8b949e] hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity';
-            del.title = 'Usuń folder (urządzenia zostaną przeniesione poza foldery)';
-            del.innerHTML = '<i class="fa-solid fa-trash text-xs"></i>';
-            del.onclick = (e) => { e.stopPropagation(); deleteFolder(folder); };
-
-            div.onclick = () => {
-                if (collapsedFolders.has(folder)) collapsedFolders.delete(folder);
-                else collapsedFolders.add(folder);
-                localStorage.setItem('fbk-collapsed-folders', JSON.stringify([...collapsedFolders]));
-                loadDevices();
-            };
-            div.append(label, del);
-            return div;
-        }
-
+        // Pozostałe funkcje
         function loadDevices() {
-            fetch('/api/devices')
-                .then(r => {
-                    if (r.status === 401) { window.location = '/login'; throw new Error('401'); }
-                    if (handleDbTooNew(r)) throw new Error('426');
-                    return r.json();
-                })
-                .then(data => {
-                    allFolders = data.folders || [];
-                    const devices = data.devices || [];
-                    const container = document.getElementById('devices-list');
-                    container.innerHTML = '';
+    fetch('/api/devices')
+        .then(r => {
+            if (r.status === 401) { window.location = '/login'; throw new Error('401'); }
+            return r.json();
+        })
+        .then(data => {
+            const container = document.getElementById('devices-list');
+            container.innerHTML = '';
 
-                    if (devices.length === 0 && allFolders.length === 0) {
-                        container.innerHTML = `<div class="px-3 py-4 text-sm text-[#8b949e]">Brak urządzeń</div>`;
-                        return;
-                    }
-
-                    // najpierw foldery (alfabetycznie z API), potem urządzenia luzem
-                    allFolders.forEach(folder => {
-                        const inFolder = devices.filter(d => d.folder === folder);
-                        container.appendChild(renderFolderHeader(folder, inFolder.length));
-                        if (!collapsedFolders.has(folder)) {
-                            inFolder.forEach(d => container.appendChild(renderDeviceRow(d, true)));
-                            if (inFolder.length === 0) {
-                                const empty = document.createElement('div');
-                                empty.className = 'ml-4 px-3 py-2 text-xs text-[#8b949e] italic';
-                                empty.textContent = 'pusty folder';
-                                container.appendChild(empty);
-                            }
-                        }
-                    });
-                    devices.filter(d => !d.folder || !allFolders.includes(d.folder))
-                           .forEach(d => container.appendChild(renderDeviceRow(d, false)));
-                })
-                .catch(err => {
-                    if (err.message === '426') return; // baner już pokazany
-                    console.error(err);
-                    addLog("Błąd ładowania listy urządzeń", "error");
-                });
-        }
-
-        // ==================== FOLDERY ====================
-        async function createFolder() {
-            const name = prompt('Nazwa nowego folderu:');
-            if (!name || !name.trim()) return;
-            const formData = new FormData();
-            formData.append('name', name.trim());
-            const res = await fetch('/api/folders', { method: 'POST', body: formData });
-            if (res.ok) {
-                const data = await res.json();
-                addLog(data.message, 'success');
-                loadDevices();
-            } else if (!handleDbTooNew(res)) {
-                const err = await res.json().catch(() => ({}));
-                addLog(err.detail || 'Błąd tworzenia folderu', 'error');
+            if (!data.devices || data.devices.length === 0) {
+                container.innerHTML = `<div class="px-3 py-4 text-sm text-[#8b949e]">Brak urządzeń</div>`;
+                return;
             }
-        }
 
-        async function deleteFolder(name) {
-            if (!confirm(`Usunąć folder "${name}"?\nUrządzenia z tego folderu zostaną przeniesione poza foldery (nie zostaną usunięte).`)) return;
-            const res = await fetch(`/api/folders/${encodeURIComponent(name)}`, { method: 'DELETE' });
-            if (res.ok) {
-                const data = await res.json();
-                addLog(data.message, 'success');
-                collapsedFolders.delete(name);
-                localStorage.setItem('fbk-collapsed-folders', JSON.stringify([...collapsedFolders]));
-                loadDevices();
-            } else if (!handleDbTooNew(res)) {
-                const err = await res.json().catch(() => ({}));
-                addLog(err.detail || 'Błąd usuwania folderu', 'error');
-            }
-        }
+            data.devices.forEach(device => {
+                const div = document.createElement('div');
+                div.className = `group px-3 py-3 rounded-xl mb-1 flex justify-between items-center hover:bg-[#161b22] cursor-pointer ${currentDevice === device.name ? 'bg-[#1f6feb] text-white' : ''}`;
 
-        // ==================== PRZENOSZENIE / USUWANIE URZĄDZENIA ====================
-        let moveDeviceName = null;
-
-        function showMoveModal(device) {
-            moveDeviceName = device.name;
-            document.getElementById('move-device-label').textContent = device.name;
-            fillFolderSelect('move-folder-select', device.folder || '');
-            const modal = document.getElementById('move-modal');
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-        }
-
-        function closeMoveModal() {
-            const modal = document.getElementById('move-modal');
-            modal.classList.remove('flex');
-            modal.classList.add('hidden');
-            moveDeviceName = null;
-        }
-
-        async function submitMove() {
-            if (!moveDeviceName) return;
-            const formData = new FormData();
-            formData.append('folder', document.getElementById('move-folder-select').value);
-            const res = await fetch(`/api/devices/${encodeURIComponent(moveDeviceName)}/move`, { method: 'POST', body: formData });
-            if (res.ok) {
-                const data = await res.json();
-                addLog(data.message, 'success');
-                closeMoveModal();
-                loadDevices();
-            } else if (!handleDbTooNew(res)) {
-                const err = await res.json().catch(() => ({}));
-                addLog(err.detail || 'Błąd przenoszenia urządzenia', 'error');
-            }
-        }
-
-        async function deleteDevice(name) {
-            if (!confirm(`Usunąć urządzenie "${name}" z bazy?\nBackupy na magazynie NIE zostaną skasowane.`)) return;
-            const res = await fetch(`/api/devices/${encodeURIComponent(name)}`, { method: 'DELETE' });
-            if (res.ok) {
-                addLog(`Usunięto urządzenie: ${name}`, 'success');
-                if (currentDevice === name) {
-                    currentDevice = null;
-                    document.getElementById('current-device-name').textContent = 'Wybierz urządzenie';
-                    document.getElementById('current-device-host').textContent = '';
-                    document.getElementById('versions-table').innerHTML = '';
-                }
-                loadDevices();
-            } else if (!handleDbTooNew(res)) {
-                const err = await res.json().catch(() => ({}));
-                addLog(err.detail || 'Błąd usuwania urządzenia', 'error');
-            }
-        }
+                const schedIcon = device.sched_enabled
+                    ? `<i class="fa-regular fa-clock text-xs ml-1 ${currentDevice === device.name ? 'text-white/80' : 'text-[#3fb950]'}"
+                          title="Harmonogram aktywny${schedulerNextRuns[device.name] ? ' • następny: ' + schedulerNextRuns[device.name].replace('T',' ') : ''}"></i>`
+                    : '';
+                div.innerHTML = `
+                    <div onclick="selectDevice(${JSON.stringify(device).replace(/"/g, '&quot;')})" class="flex-1 min-w-0">
+                        <div class="font-medium truncate">${device.name}${schedIcon}</div>
+                        <div class="text-xs ${currentDevice === device.name ? 'text-white/70' : 'text-[#8b949e]'} truncate">${device.host}</div>
+                    </div>
+                    <div class="flex gap-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onclick="event.stopImmediatePropagation(); showEditDeviceModal('${device.name}')"
+                                class="px-2 py-1 text-[#8b949e] hover:text-white">
+                            <i class="fa-solid fa-edit"></i>
+                        </button>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        })
+        .catch(err => {
+            console.error(err);
+            addLog("Błąd ładowania listy urządzeń", "error");
+        });
+}
         function selectDevice(device) {
             currentDevice = device.name;
             document.getElementById('current-device-name').textContent = device.name;
