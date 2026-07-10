@@ -8,6 +8,9 @@ services:
       - "8080:8000"
     volumes:
       - fortibackup-data:/root/.fortibackup-web
+      # Zaszyfrowana baza urządzeń (devices.db) — katalog z hosta.
+      # Zmień lewą stronę na dowolną ścieżkę na hoście, prawa MUSI zostać /DB.
+      - ./db:/DB
     environment:
       - TZ=Europe/Warsaw
     restart: unless-stopped
