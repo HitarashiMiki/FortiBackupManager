@@ -69,7 +69,7 @@ docker compose up -d --build
 Baza urządzeń posiada wbudowaną kontrolę wersji - nie można jej
 otworzyć przez starszą wersję aplikacji.
 
-## Setup without docker(not supported for bugfixing)
+## Instalacja bez dockera (nie wspierana)
 
 ```bash
 pip install -r requirements.txt
