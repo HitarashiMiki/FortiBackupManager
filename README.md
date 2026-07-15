@@ -52,7 +52,8 @@ Aplikacja nasłuchuje domyślnie na **http://localhost:8080**
 1. Wejdź na `http://localhost:8080` → nastąpi automatyczne przekierowanie na **/setup**.
 2. Podaj dane serwera FTP/SFTP (host, port, użytkownik, hasło,
    katalog bazowy). Użytkownik na serwerze FTP/SFTP musi mieć
-   uprawnienia do zapisu plików.
+   uprawnienia do zapisu plików. **Serwer FTP/SFTP** musi być dostępny dla urządzeń
+   Fortigate które będą wykonywać backup. Należy podać zewnętrzny adres IP.
 3. Przejdź do logowania i podaj **hasło główne** — przy pierwszym logowaniu
    tworzy ono nową, zaszyfrowaną bazę urządzeń. To hasło szyfruje wszystkie
    dane dostępowe do FortiGate'ów: nie da się go odzyskać ani zresetować.
