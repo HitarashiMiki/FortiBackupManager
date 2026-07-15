@@ -1,7 +1,7 @@
 # FortiBackup Web
 
 Self-hostowany, webowy menadżer kopii zapasowych konfiguracji **FortiGate**
-Backupy lądują na zdalnym magazynie FTP/SFTP, zaszyfrowana
+Backupy znajdują się na zdalnym magazynie FTP/SFTP, zaszyfrowana
 baza urządzeń jest umiejscowiona lokalnie.
 
 Stack: FastAPI + Jinja2 + vanilla JS (Tailwind), docker-compose.
