@@ -86,3 +86,8 @@ w systemie.
 - Hasło główne nigdy nie jest zapisywane na dysku ani w plikach cookie.
 - Przy użyciu reverse proxy z TLS (np. Caddy) ustaw `https_only=True`
   w `app/main.py`.
+
+
+## Screenshot
+
+![Screenshot głównej strony aplikacji](https://github.com/HitarashiMiki/FortiBackupManager/raw/main/img/1.png "#screenshot")
