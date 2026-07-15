@@ -37,7 +37,7 @@
         </div>
     </nav>
 
-    <!-- Baner: baza zapisana przez nowszą wersję programu -->
+    <!-- Baner: -->
     <div id="db-version-banner" class="hidden bg-[#3c1618] text-[#ff7b72] border-b border-[#f8514933] px-6 py-3 text-sm flex-shrink-0">
         <i class="fa-solid fa-triangle-exclamation mr-2"></i>
         <span id="db-version-banner-text"></span>
@@ -63,7 +63,7 @@
             </div>
         </div>
 
-        <!-- Główny panel -->
+        <!-- Main panel -->
         <div class="flex-1 flex flex-col overflow-hidden">
             <div class="p-4 border-b border-[#30363d] bg-[#161b22] flex justify-between items-center">
                 <div>
@@ -82,7 +82,7 @@
                 </div>
             </div>
 
-            <!-- Tabela wersji -->
+            <!-- Version info -->
             <div class="flex-1 p-5 overflow-auto">
                 <div class="flex justify-between mb-4">
                     <span class="font-semibold text-lg">Wersje konfiguracji</span>
@@ -108,7 +108,7 @@
                 </table>
             </div>
 
-            <!-- DZIENNIK ZDARZEŃ -->
+            <!-- Change log -->
             <div class="border-t border-[#30363d] bg-[#010409] h-44 flex flex-col flex-shrink-0">
                 <div class="flex justify-between px-4 py-2 border-b border-[#30363d]">
                     <span class="font-semibold text-sm"><i class="fa-solid fa-terminal mr-2"></i>Dziennik zdarzeń</span>
@@ -119,7 +119,7 @@
         </div>
     </div>
 
-    <!-- ==================== MODAL DODAWANIA / EDYCJI URZĄDZENIA ==================== -->
+    <!-- ==================== ADDING / MODIFYING DEVICE ==================== -->
     <div id="device-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
         <div class="bg-[#161b22] border border-[#30363d] rounded-2xl w-full max-w-2xl modal">
             <div class="flex justify-between items-center px-6 py-4 border-b border-[#30363d]">
@@ -176,7 +176,7 @@
                         <select id="device-folder" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5"></select></div>
                 </div>
 
-                <!-- HARMONOGRAM AUTOMATYCZNYCH BACKUPÓW -->
+                <!-- Backup Schedule -->
                 <div class="border border-[#30363d] rounded-xl p-4 space-y-4">
                     <div class="flex items-center gap-x-3">
                         <input type="checkbox" id="sched-enabled" onchange="toggleSchedFields()" class="w-4 h-4 accent-[#1f6feb]">
@@ -227,7 +227,7 @@
         </div>
     </div>
 
-    <!-- MODAL PORÓWNANIA -->
+    <!-- Backup Comparison -->
     <div id="diff-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
         <div class="bg-[#161b22] border border-[#30363d] rounded-2xl w-[95%] max-w-7xl h-[85vh] flex flex-col">
             <div class="flex justify-between items-center p-4 border-b border-[#30363d]">
@@ -250,7 +250,7 @@
         </div>
     </div>
 
-    <!-- MODAL PRZENOSZENIA URZĄDZENIA DO FOLDERU -->
+    <!-- Device Change Folder -->
     <div id="move-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
         <div class="bg-[#161b22] border border-[#30363d] rounded-2xl w-full max-w-sm modal">
             <div class="flex justify-between items-center px-6 py-4 border-b border-[#30363d]">
@@ -275,16 +275,15 @@
         let currentDevice = null;
         let isEditMode = false;
         let allFolders = [];
-        // zwinięte foldery pamiętane per przeglądarka
+        // let browser remember what folders were collapsed
         let collapsedFolders = new Set(JSON.parse(localStorage.getItem('fbk-collapsed-folders') || '[]'));
 
-        // 426 Upgrade Required = baza zapisana przez nowszą wersję programu.
-        // Pokazujemy trwały baner — dalsza praca grozi obcięciem danych.
+        // 426 Upgrade Required = db was saved by a newer version of app.
         let dbVersionWarned = false;
         function handleDbTooNew(res) {
             if (res.status !== 426) return false;
             res.json().then(err => {
-                const msg = err.detail || 'Baza urządzeń wymaga nowszej wersji programu — zaktualizuj FortiBackup Web.';
+                const msg = err.detail || 'Baza została zapisana przy użyciu nowszej wersji aplikacji.';
                 document.getElementById('db-version-banner-text').textContent = msg;
                 document.getElementById('db-version-banner').classList.remove('hidden');
                 if (!dbVersionWarned) { addLog(msg, 'error'); dbVersionWarned = true; }
@@ -306,8 +305,7 @@
             document.getElementById('log-container').innerHTML = '';
         }
 
-        // ==================== MODAL URZĄDZENIA ====================
-        // Wypełnia <select> listą folderów (+ opcja "poza folderami")
+        // ==================== DEVICES ====================
         function fillFolderSelect(selectId, selected) {
             const sel = document.getElementById(selectId);
             sel.innerHTML = '';
@@ -354,9 +352,9 @@
             document.getElementById('device-host').value = device.host;
             document.getElementById('device-port').value = device.port || 22;
             document.getElementById('device-username').value = device.username || 'admin';
-            document.getElementById('device-password').value = '';   // sekrety nie są wysyłane do przeglądarki
+            document.getElementById('device-password').value = '';   
             document.getElementById('device-method').value = device.method || 'ssh_push';
-            document.getElementById('device-api-token').value = '';  // puste = zachowaj stary token
+            document.getElementById('device-api-token').value = '';  // if empty, means no change on edit
             document.getElementById('device-api-port').value = device.api_port || 443;
             document.getElementById('device-vdom').checked = !!device.vdom_enabled;
             document.getElementById('device-description').value = device.description || '';
@@ -387,7 +385,7 @@
             document.getElementById('sched-weekday-box').classList.toggle('hidden', mode !== 'weekly');
         }
 
-        // ==================== HARMONOGRAM ====================
+        // ==================== SCHEDULER ====================
         let schedulerNextRuns = {};
 
         async function refreshSchedulerBadge() {
@@ -400,13 +398,13 @@
                 const n = Object.keys(schedulerNextRuns).length;
                 if (s.armed) {
                     badge.className = 'px-3 py-1 rounded-full text-xs bg-[#12361f] text-[#3fb950]';
-                    badge.innerHTML = `<i class="fa-regular fa-clock mr-1"></i>Harmonogram: aktywny (${n} urz.)`;
+                    badge.innerHTML = `<i class="fa-regular fa-clock mr-1"></i>Harmonogram: aktywny na (${n} urz.)`;
                     badge.title = Object.entries(schedulerNextRuns)
-                        .map(([k, v]) => `${k}: ${v.replace('T', ' ')}`).join('\n') || 'Brak urządzeń z harmonogramem';
+                        .map(([k, v]) => `${k}: ${v.replace('T', ' ')}`).join('\n') || 'Brak urządzeń z aktywnym harmonogramem';
                 } else {
                     badge.className = 'px-3 py-1 rounded-full text-xs bg-[#3c2a13] text-[#d29922]';
-                    badge.innerHTML = `<i class="fa-regular fa-clock mr-1"></i>Harmonogram: uśpiony`;
-                    badge.title = 'Uzbroi się po pierwszym logowaniu po restarcie serwera';
+                    badge.innerHTML = `<i class="fa-regular fa-clock mr-1"></i>Harmonogram: nieaktywny`;
+                    badge.title = 'Aktywuje się po pierwszym logowaniu po restarcie serwera';
                 }
                 if (s.last_error) addLog(`Harmonogram: ${s.last_error}`, 'error');
             } catch (e) { /* ignoruj */ }
@@ -466,7 +464,7 @@
                     const res = await fetch(`/api/jobs/${jobId}`);
                     if (!res.ok) { clearInterval(interval); return; }
                     const job = await res.json();
-                    // dopisuj tylko nowe linie logu
+                    // only new line
                     for (; shown < job.log.length; shown++) addLog(job.log[shown]);
                     if (job.status !== 'running') {
                         clearInterval(interval);
@@ -500,16 +498,15 @@
             pollJob(data.job_id, () => { if (currentDevice) loadVersions(currentDevice); });
         }
 
-        // ==================== PORÓWNANIE ====================
+        // ==================== COMPARE ====================
         let diffPaths = null;
 
         async function compareSelectedVersions() {
             const checked = document.querySelectorAll('.version-checkbox:checked');
             if (checked.length !== 2) {
-                addLog("Zaznacz dokładnie dwie wersje", "error");
+                addLog("Zaznacz dwie wersje konfiguracji", "error");
                 return;
             }
-            // starsza po lewej (nazwy zawierają timestamp, więc sort działa)
             const paths = [checked[0].dataset.path, checked[1].dataset.path].sort();
             diffPaths = paths;
             await fetchDiff();
@@ -542,7 +539,7 @@
             diffStats.textContent = `+${data.stats.added}  −${data.stats.removed}  ~${data.stats.changed}`;
             diffModal.classList.remove('hidden');
             diffModal.classList.add('flex');
-            addLog("Porównanie gotowe", "success");
+            addLog("Porównanie wygenerowane", "success");
         }
 
         function closeDiffModal() {
@@ -551,9 +548,7 @@
             modal.classList.add('hidden');
         }
 
-        // ==================== LISTA URZĄDZEŃ (Z FOLDERAMI) ====================
-        // Wiersze budowane przez createElement + closures (nie innerHTML
-        // z onclick) — nazwy folderów/urządzeń mogą zawierać dowolne znaki.
+        // ==================== DEVICE LIST  ====================
         function renderDeviceRow(device, indented) {
             const selected = currentDevice === device.name;
             const div = document.createElement('div');
@@ -616,7 +611,7 @@
 
             const del = document.createElement('button');
             del.className = 'px-2 py-1 text-[#8b949e] hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity';
-            del.title = 'Usuń folder (urządzenia zostaną przeniesione poza foldery)';
+            del.title = 'Usuń folder (urządzenia nie zostaną usunięte)';
             del.innerHTML = '<i class="fa-solid fa-trash text-xs"></i>';
             del.onclick = (e) => { e.stopPropagation(); deleteFolder(folder); };
 
@@ -666,15 +661,15 @@
                            .forEach(d => container.appendChild(renderDeviceRow(d, false)));
                 })
                 .catch(err => {
-                    if (err.message === '426') return; // baner już pokazany
+                    if (err.message === '426') return;
                     console.error(err);
                     addLog("Błąd ładowania listy urządzeń", "error");
                 });
         }
 
-        // ==================== FOLDERY ====================
+        // ==================== FOLDERS ====================
         async function createFolder() {
-            const name = prompt('Nazwa nowego folderu:');
+            const name = prompt('Nazwa:');
             if (!name || !name.trim()) return;
             const formData = new FormData();
             formData.append('name', name.trim());
@@ -690,7 +685,7 @@
         }
 
         async function deleteFolder(name) {
-            if (!confirm(`Usunąć folder "${name}"?\nUrządzenia z tego folderu zostaną przeniesione poza foldery (nie zostaną usunięte).`)) return;
+            if (!confirm(`Usunąć folder "${name}"?\nUrządzenia z tego folderu nie zostaną usunięte.`)) return;
             const res = await fetch(`/api/folders/${encodeURIComponent(name)}`, { method: 'DELETE' });
             if (res.ok) {
                 const data = await res.json();
@@ -704,7 +699,7 @@
             }
         }
 
-        // ==================== PRZENOSZENIE / USUWANIE URZĄDZENIA ====================
+        // ==================== MOVING / DELETING DEVICES ====================
         let moveDeviceName = null;
 
         function showMoveModal(device) {
@@ -740,7 +735,7 @@
         }
 
         async function deleteDevice(name) {
-            if (!confirm(`Usunąć urządzenie "${name}" z bazy?\nBackupy na magazynie NIE zostaną skasowane.`)) return;
+            if (!confirm(`Usunąć urządzenie "${name}" z bazy?\nKopia konfiguracji nie zostanie usunięta.`)) return;
             const res = await fetch(`/api/devices/${encodeURIComponent(name)}`, { method: 'DELETE' });
             if (res.ok) {
                 addLog(`Usunięto urządzenie: ${name}`, 'success');

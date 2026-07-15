@@ -64,14 +64,13 @@ def _start_scheduler():
 app.add_middleware(
     SessionMiddleware,
     secret_key=get_or_create_secret(),
-    max_age=8 * 3600,          # dzień pracy; TTL po stronie serwera też 8h
+    max_age=8 * 3600,          
     same_site="lax",
     https_only=False,          # ustaw True, gdy stoi za TLS-em (reverse proxy)
 )
 
 templates = Jinja2Templates(directory="app/templates")
 
-# Pola urządzenia bezpieczne do wysłania do przeglądarki (BEZ sekretów)
 _DEVICE_PUBLIC_FIELDS = ("name", "host", "port", "username", "method",
                          "api_port", "vdom_enabled", "description", "folder",
                          "sched_enabled", "sched_mode", "sched_every_hours",
@@ -97,7 +96,7 @@ def get_master_password(request: Request) -> str:
 def get_storage_config() -> StorageConfig:
     settings = load_settings()
     if not settings.host:
-        raise HTTPException(status_code=400, detail="Magazyn backupów nie jest skonfigurowany")
+        raise HTTPException(status_code=400, detail="Magazyn kopi nie jest skonfigurowany")
     return settings.to_storage_config()
 
 
@@ -108,18 +107,13 @@ def _load_db(st, mp: str) -> DeviceDB:
 
 
 def _migrate_db_from_remote(settings: AppSettings, dbst, local_path: str) -> None:
-    """Jednorazowa migracja: baza urządzeń mieszkała kiedyś na magazynie
-    FTP/SFTP. Jeśli lokalnie (/DB) jej nie ma, a na magazynie jest —
-    kopiujemy, żeby logowanie nie założyło pustej bazy 'obok' istniejącej.
-    Kopia na magazynie zostaje nietknięta (awaryjny backup)."""
+    """Jednorazowa migracja: baza urządzeń była kiedyś dostępna na sftp"""
     try:
         with open_storage(settings.to_storage_config()) as rst:
             remote_path = rst.join(DB_FILENAME)
             if rst.exists(remote_path):
                 dbst.upload_bytes(rst.download_bytes(remote_path), local_path)
     except StorageError as e:
-        # Nie twórz po cichu pustej bazy, skoro na magazynie może istnieć
-        # pełna — lepiej zablokować logowanie czytelnym komunikatem.
         raise DeviceDBError(
             f"Brak lokalnej bazy w /DB, a migracja z magazynu nie powiodła się: {e}")
 
@@ -168,7 +162,7 @@ def login(request: Request, master_password: str = Form(...)):
         return templates.TemplateResponse(
             request=request, name="login.html",
             context={"error": str(e)})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e: 
         return templates.TemplateResponse(
             request=request, name="login.html",
             context={"error": f"Błąd połączenia: {e}"})
@@ -192,14 +186,13 @@ def logout(request: Request):
 def _setup_authorized(request: Request, confirm_password: str = "") -> bool:
     """Dostęp do zmiany/resetu konfiguracji:
     (a) aktywna sesja, ALBO
-    (b) znajomość AKTUALNEGO hasła magazynu — ratunek na scenariusz
-        "baza przeniesiona, logowanie niemożliwe, a /setup za sesją".
+    (b) znajomość AKTUALNEGO hasła magazynu".
     """
     if SESSIONS.get_master_password(request.session.get("token")):
         return True
     settings = load_settings()
     if not settings.host:
-        return True  # świeża instalacja — setup otwarty
+        return True
     if not confirm_password:
         return False
     client_ip = request.client.host if request.client else "?"
@@ -237,7 +230,7 @@ def save_setup(
             request=request, name="setup.html",
             context={"settings": settings, "configured": True,
                      "logged": False,
-                     "error": "Błędne aktualne hasło magazynu backupów (albo limit prób — odczekaj minutę)."})
+                     "error": "Błędne hasło magazynu kopi (albo limit prób — odczekaj minutę)."})
     settings = AppSettings(
         protocol=protocol,
         host=host.strip(),
@@ -253,15 +246,14 @@ def save_setup(
 
 @app.post("/setup/reset")
 def reset_setup(request: Request, confirm_password: str = Form("")):
-    """Wyczyszczenie konfiguracji magazynu (dane na magazynie zostają
-    nietknięte). Autoryzacja jak przy zmianie setupu."""
+    """Wyczyszczenie konfiguracji magazynu."""
     if not _setup_authorized(request, confirm_password):
         settings = load_settings()
         return templates.TemplateResponse(
             request=request, name="setup.html",
             context={"settings": settings, "configured": True,
                      "logged": False,
-                     "error": "Błędne aktualne hasło bazy danych (albo limit prób — odczekaj minutę)."})
+                     "error": "Błędne hasło bazy danych (albo limit prób — odczekaj minutę)."})
     save_settings(AppSettings())      # pusta konfiguracja
     SCHEDULER.disarm()
     request.session.clear()
@@ -344,8 +336,6 @@ def get_device(name: str, mp: str = Depends(get_master_password)):
         device = db.get(name)
         if not device:
             raise HTTPException(status_code=404, detail="Urządzenie nie istnieje")
-        # Sekretów nie wysyłamy do przeglądarki — formularz edycji pokazuje
-        # placeholder "pozostaw puste, aby nie zmieniać".
         return _device_public(device)
 
 
@@ -384,7 +374,7 @@ def update_device(
             api_port=api_port, vdom_enabled=vdom_enabled,
             description=description.strip(),
             folder=_validate_folder(db, folder),
-            extra=old.extra,   # nieznane pola nowszych wersji — nie wycinaj
+            extra=old.extra,
             sched_enabled=sched_enabled, sched_mode=sched_mode,
             sched_every_hours=sched_every_hours, sched_time=sched_time.strip(),
             sched_weekday=sched_weekday,
@@ -399,9 +389,7 @@ def update_device(
 
 @app.delete("/api/devices/{name}")
 def delete_device(name: str, mp: str = Depends(get_master_password)):
-    """Usuwa urządzenie z bazy. Backupy na magazynie zostają nietknięte —
-    świadomie: kopie konfiguracji to ostatnia rzecz, którą chcemy kasować
-    kaskadowo."""
+    """Usuwa urządzenie z bazy. Backupy na magazynie zostają nietknięte."""
     with open_db_storage() as st:
         db = _load_db(st, mp)
         db.remove(name)
@@ -438,7 +426,7 @@ def add_folder(name: str = Form(...), mp: str = Depends(get_master_password)):
 
 @app.delete("/api/folders/{name}")
 def delete_folder(name: str, mp: str = Depends(get_master_password)):
-    """Usuwa folder; urządzenia z niego lądują poza folderami."""
+    """Usuwa folder; urządzenia z niego zostaną przeniesione poza folder."""
     with open_db_storage() as st:
         db = _load_db(st, mp)
         try:
@@ -462,7 +450,6 @@ def _run_backup_job(job, cfg: StorageConfig, mp: str, device_names: Optional[lis
     """Wątek roboczy: backup jednego lub wszystkich urządzeń, log do joba."""
     ok = True
     try:
-        # baza urządzeń lokalnie (/DB), same backupy na zdalnym magazynie
         with open_db_storage() as dbst:
             db = _load_db(dbst, mp)
         with open_storage(cfg) as st:
@@ -549,7 +536,6 @@ def view_file(path: str, mp: str = Depends(get_master_password)):
     cfg = get_storage_config()
     with open_storage(cfg) as st:
         content = st.download_bytes(norm).decode("utf-8", errors="replace")
-    # zwykły tekst — czytelny podgląd po otwarciu w nowej karcie
     return PlainTextResponse(content)
 
 

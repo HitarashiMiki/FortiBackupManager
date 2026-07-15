@@ -23,7 +23,7 @@ MAX_JOBS_KEPT = 200
 class Job:
     id: str
     title: str
-    status: str = "running"        # running | done | failed
+    status: str = "w trakcie"        # running | done | failed
     log: List[str] = field(default_factory=list)
     created: float = field(default_factory=time.time)
     finished: Optional[float] = None
@@ -65,7 +65,7 @@ class JobRegistry:
 
     def finish(self, job: Job, ok: bool) -> None:
         with self._lock:
-            job.status = "done" if ok else "failed"
+            job.status = "zakończone" if ok else "błąd"
             job.finished = time.time()
 
     def recent(self, n: int = 20) -> List[Job]:

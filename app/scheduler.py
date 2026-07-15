@@ -106,7 +106,7 @@ class Scheduler:
             self._sigs.clear()
 
     def refresh(self) -> None:
-        """Wywoływane po zmianach na urządzeniach — przeładuj przy okazji."""
+        """Wywoływane po zmianach na urządzeniach."""
         with self._lock:
             self._reload_due = 0.0
 
@@ -154,8 +154,6 @@ class Scheduler:
 
     def _reload_devices(self, mp: str) -> None:
         try:
-            # baza urządzeń żyje lokalnie w /DB — magazyn FTP/SFTP jest
-            # potrzebny dopiero przy samym backupie (_run_scheduled)
             with open_db_storage() as st:
                 db = DeviceDB(st, mp)
                 db.load_or_create()
@@ -176,7 +174,6 @@ class Scheduler:
                 sig = _sched_signature(dev)
                 if dev.sched_enabled:
                     alive.add(dev.name)
-                    # nowe urządzenie albo zmieniony harmonogram -> przelicz
                     if self._sigs.get(dev.name) != sig or dev.name not in self._next:
                         self._next[dev.name] = compute_next_run(dev, now)
                 self._sigs[dev.name] = sig

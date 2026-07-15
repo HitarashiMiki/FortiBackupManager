@@ -31,13 +31,13 @@ from typing import Dict, Optional
 DATA_DIR = Path.home() / ".fortibackup-web"
 SECRET_FILE = DATA_DIR / "session_secret"
 
-SESSION_TTL = 8 * 3600          # 8h przesuwane (dzień pracy)
+SESSION_TTL = 8 * 3600          # 8h (dzień pracy)
 LOGIN_MAX_ATTEMPTS = 5          # prób…
 LOGIN_WINDOW = 60               # …na minutę na IP
 
 
 # --------------------------------------------------------------------------- #
-#  Secret podpisujący cookie
+#  Secret
 # --------------------------------------------------------------------------- #
 
 def get_or_create_secret() -> str:
@@ -56,7 +56,7 @@ def get_or_create_secret() -> str:
 
 
 # --------------------------------------------------------------------------- #
-#  Sesje server-side
+#  Server-side session
 # --------------------------------------------------------------------------- #
 
 @dataclass
@@ -89,7 +89,7 @@ class SessionStore:
             if s.expires < time.time():
                 del self._sessions[token]
                 return None
-            s.expires = time.time() + SESSION_TTL  # przesuwany TTL
+            s.expires = time.time() + SESSION_TTL
             return s.master_password
 
     def destroy(self, token: Optional[str]) -> None:
@@ -109,7 +109,7 @@ SESSIONS = SessionStore()
 
 
 # --------------------------------------------------------------------------- #
-#  Rate limit logowania
+#  Rate limit login
 # --------------------------------------------------------------------------- #
 
 class LoginRateLimiter:
@@ -134,7 +134,7 @@ LOGIN_LIMITER = LoginRateLimiter()
 
 
 # --------------------------------------------------------------------------- #
-#  Walidacja ścieżek plików backupów
+#  Backup directory validation
 # --------------------------------------------------------------------------- #
 
 class PathTraversalError(Exception):

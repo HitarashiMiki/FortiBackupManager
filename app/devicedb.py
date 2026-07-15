@@ -13,9 +13,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from .storage import RemoteStorage, StorageError
 
 # Nagłówek pliku bazy. FBK1 = schemat 1 (tylko lista urządzeń). FBK2 = schemat 2
-# (foldery + min_reader_version). Podbicie magica jest CELOWE: stary program
-# (FBK1) ignorował nieznane pola i przy zapisie wyciąłby dane dopisane przez
-# nowszą wersję — zamiast tego ma odmówić otwarcia pliku.
+# (foldery + min_reader_version).
 MAGIC_V1 = b"FBK1"
 MAGIC = b"FBK2"
 MAGIC_PREFIX = b"FBK"
@@ -24,15 +22,14 @@ KDF_ITERATIONS = 480_000
 DB_FILENAME = "devices.db"
 
 # Najwyższa wersja schematu, którą TA wersja programu rozumie i może
-# bezpiecznie zapisywać. Baza niesie w payloadzie "min_reader_version" —
-# jeśli jest wyższa niż ta stała, program musi odmówić otwarcia.
+# bezpiecznie zapisywać.
 DB_SCHEMA_VERSION = 2
 
 DB_TOO_NEW_MSG = (
     "Baza urządzeń została zapisana przez nowszą wersję programu "
     "(schemat {found}, ta wersja obsługuje maks. {supported}). "
     "Zaktualizuj FortiBackup Web — otwarcie starszą wersją mogłoby "
-    "bezpowrotnie wyciąć nowe dane."
+    "bezpowrotnie usunąć dane."
 )
 
 
@@ -61,14 +58,12 @@ class Device:
     api_port: int = 443
     vdom_enabled: bool = False
     description: str = ""
-    # Harmonogram automatycznych backupów (per urządzenie, współdzielony
-    # przez zespół — żyje w zaszyfrowanej bazie na magazynie)
+    # Harmonogram automatycznych backupów
     sched_enabled: bool = False
     sched_mode: str = "daily"        # "interval" | "daily" | "weekly"
     sched_every_hours: int = 24      # dla trybu interval
     sched_time: str = "02:00"        # dla daily/weekly (HH:MM)
     sched_weekday: int = 0           # dla weekly (0 = poniedziałek)
-    # Folder w drzewie urządzeń ("" = poza folderami / korzeń)
     folder: str = ""
     # Pola nieznane tej wersji programu (dopisane przez nowszą, kompatybilną
     # wersję) — przechowywane i oddawane przy zapisie, żeby edycja starszą
@@ -104,12 +99,11 @@ def encrypt_db(devices: List[Device], password: str, salt: Optional[bytes] = Non
                extra: Optional[dict] = None) -> bytes:
     salt = salt or os.urandom(SALT_LEN)
     key = _derive_key(password, salt)
-    data = dict(extra or {})  # nieznane klucze payloadu — zachowaj (jak w Device.extra)
+    data = dict(extra or {}) 
     data.update({
         "version": DB_SCHEMA_VERSION,
         # Minimalna wersja schematu, jaką musi rozumieć program, żeby móc
-        # bezpiecznie CZYTAĆ I ZAPISYWAĆ tę bazę. Przyszłe, kompatybilne
-        # rozszerzenia mogą podbić "version" nie ruszając tego pola.
+        # bezpiecznie CZYTAĆ I ZAPISYWAĆ tę bazę.
         "min_reader_version": 2,
         "devices": [d.to_dict() for d in devices],
         "folders": sorted(set(folders or []), key=str.lower),
@@ -136,7 +130,7 @@ def decrypt_payload(blob: bytes, password: str) -> dict:
     try:
         payload = Fernet(key).decrypt(token)
     except InvalidToken:
-        raise WrongPasswordError("Błędne hasło główne lub uszkodzona baza.")
+        raise WrongPasswordError("Błędne hasło lub uszkodzona baza.")
     data = json.loads(payload.decode("utf-8"))
     min_reader = int(data.get("min_reader_version", 1))
     if min_reader > DB_SCHEMA_VERSION:
@@ -160,7 +154,7 @@ class DeviceDB:
         self.password = password
         self.devices: List[Device] = []
         self.folders: List[str] = []
-        self._extra: dict = {}          # nieznane klucze payloadu (patrz encrypt_db)
+        self._extra: dict = {}
         self._salt: Optional[bytes] = None
 
     @property
@@ -246,8 +240,7 @@ class DeviceDB:
         self.save()
 
     def remove_folder(self, name: str) -> int:
-        """Usuwa folder; jego urządzenia lądują poza folderami (korzeń).
-        Zwraca liczbę przeniesionych urządzeń."""
+        """Usuwa folder; Urządzenia są przenoszone poza folder"""
         try:
             self.reload()
         except StorageError:
