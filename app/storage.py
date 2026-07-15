@@ -26,7 +26,7 @@ AUTH_TIMEOUT = 30     # sekundy (uwierzytelnianie bywa wolniejsze)
 
 
 class StorageError(Exception):
-    """Błąd komunikacji ze zdalnym magazynem."""
+    """Błąd komunikacji z magazynem."""
 
 
 @dataclass
@@ -51,7 +51,7 @@ class StorageConfig:
 
 
 # --------------------------------------------------------------------------- #
-#  Interfejs
+#  Interface
 # --------------------------------------------------------------------------- #
 
 class RemoteStorage:
@@ -95,8 +95,6 @@ class SFTPStorage(RemoteStorage):
         last_err = None
         for attempt in (1, 2):
             try:
-                # Własny socket z timeoutem — bez tego nieodpowiadający serwer
-                # potrafi zawiesić połączenie na bardzo długo.
                 sock = socket.create_connection(
                     (self.cfg.host, self.cfg.port), timeout=CONNECT_TIMEOUT)
                 self._transport = paramiko.Transport(sock)
@@ -112,8 +110,7 @@ class SFTPStorage(RemoteStorage):
                 return
             except paramiko.AuthenticationException as e:
                 self.close()
-                # "Authentication timeout" = serwer nie zdążył odpowiedzieć —
-                # warto ponowić; błędne hasło ponawiamy też raz (nieszkodliwe)
+                # "Authentication timeout" = serwer nie zdążył odpowiedzieć
                 last_err = StorageError(
                     f"SFTP {self.cfg.host}:{self.cfg.port} — uwierzytelnianie: {e}")
             except (paramiko.SSHException, socket.error, OSError) as e:
@@ -149,8 +146,6 @@ class SFTPStorage(RemoteStorage):
                 except OSError as e:
                     raise StorageError(
                         f"Nie można utworzyć katalogu {cur}: {e}\n"
-                        "(przy chroot-owanym SFTP korzeń bywa tylko do odczytu — "
-                        "ustaw katalog bazowy wewnątrz zapisywalnego podkatalogu)"
                     ) from e
 
     def list_files(self, path: str) -> List[RemoteFile]:
@@ -244,7 +239,6 @@ class FTPStorage(RemoteStorage):
             try:
                 self._ftp.mkd(cur)
             except ftplib.error_perm as e:
-                # 550 = już istnieje / brak uprawnień — "istnieje" ignorujemy
                 if not str(e).startswith("550"):
                     raise StorageError(f"Błąd tworzenia katalogu {cur}: {e}") from e
 
@@ -272,7 +266,6 @@ class FTPStorage(RemoteStorage):
                 return []
         except ftplib.all_errors:
             pass
-        # Fallback: NLST (bez metadanych)
         try:
             for name in self._ftp.nlst(path):
                 base = posixpath.basename(name)
@@ -320,13 +313,13 @@ class FTPStorage(RemoteStorage):
 
 
 # --------------------------------------------------------------------------- #
-#  Lokalny dysk (używany opcjonalnie dla bazy urządzeń)
+#  Local storage (for devices.db)
 # --------------------------------------------------------------------------- #
 
 class LocalStorage(RemoteStorage):
     """Magazyn na lokalnym dysku. Backupy ZAWSZE lądują na zdalnym FTP/SFTP —
     ten backend służy wyłącznie do opcjonalnego trzymania bazy urządzeń
-    lokalnie (baza pozostaje zaszyfrowana hasłem głównym)."""
+    lokalnie."""
 
     def connect(self) -> None:
         from pathlib import Path

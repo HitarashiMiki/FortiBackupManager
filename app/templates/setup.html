@@ -15,9 +15,8 @@
         {% else %}
         <h1 class="text-3xl font-bold mb-2">Pierwsza konfiguracja</h1>
         <p class="text-[#8b949e] mb-8">
-            Podaj dane połączenia z magazynem FTP/SFTP na backupy.
-            Baza urządzeń jest trzymana lokalnie w kontenerze (katalog /DB —
-            zamontuj go jako wolumen z hosta w docker-compose).
+            Podaj dane połączenia z magazynem FTP/SFTP na kopię.
+            Baza urządzeń jest trzymana lokalnie w kontenerze.
         </p>
         {% endif %}
 
@@ -73,8 +72,7 @@
                        class="w-full bg-[#0d1117] border border-amber-700/60 rounded-lg px-3 py-2">
                 <p class="text-xs text-[#8b949e] mt-2">
                     Nie jesteś zalogowany, więc zmiana konfiguracji wymaga znajomości
-                    obecnego hasła do serwera magazynu (ochrona przed podmianą serwera
-                    backupów przez osobę postronną).
+                    obecnego hasła do serwera magazynu.
                 </p>
             </div>
             {% endif %}
@@ -92,7 +90,7 @@
             <p class="text-sm text-[#8b949e] mb-4">
                 Wyczyszczenie konfiguracji usuwa TYLKO lokalne ustawienia połączenia
                 z magazynem (aplikacja wraca do stanu pierwszej konfiguracji).
-                Backupy na magazynie i baza urządzeń w /DB pozostają nietknięte.
+                Backupy na magazynie i baza urządzeń pozostają nietknięte.
             </p>
             <form method="post" action="/setup/reset"
                   onsubmit="return confirm('Na pewno wyczyścić konfigurację magazynu?');"

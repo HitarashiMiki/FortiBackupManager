@@ -185,7 +185,7 @@ def backup_api_pull(device: Device, storage: RemoteStorage, logger: Optional[Log
         try:
             return requests.request(method, url, params=params, headers=headers, verify=verify_tls, timeout=(15, 60))
         except requests.RequestException as e:
-            raise FortiGateError(f"API błąd połączenia: {e}") from e
+            raise FortiGateError(f"błąd połączenia API: {e}") from e
 
     _log(logger, f"[{device.name}] Pobieram przez REST API (POST)...")
     r = _call("POST")
