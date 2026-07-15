@@ -26,7 +26,9 @@ Najważniejsze decyzje (względem pierwszej wersji webowej):
 
 from __future__ import annotations
 
+import platform
 import posixpath
+import subprocess
 import threading
 from typing import Optional
 
@@ -491,6 +493,100 @@ def backup_all(mp: str = Depends(get_master_password)):
     threading.Thread(target=_run_backup_job, args=(job, cfg, mp, None),
                      daemon=True).start()
     return {"status": "started", "job_id": job.id}
+
+
+# ======================== (PING / TRACEROUTE) ========================
+
+NET_TOOL_TIMEOUT = 90
+
+
+def _ping_cmd(host: str) -> list:
+    if platform.system() == "Windows":
+        return ["ping", "-n", "4", host]
+    # -W 2: nie czekaj w nieskończoność na odpowiedź martwego hosta
+    return ["ping", "-c", "4", "-W", "2", host]
+
+
+def _traceroute_cmd(host: str) -> list:
+    if platform.system() == "Windows":
+        return ["tracert", "-d", "-w", "2000", host]
+    # -n: bez reverse-DNS (bywa wolniejszy niż sam pomiar), -q 1: 1 sonda/hop
+    return ["traceroute", "-n", "-w", "2", "-q", "1", host]
+
+
+def _run_net_tool_job(job, cmd: list, tool_name: str) -> None:
+    """Wątek roboczy: uruchamia narzędzie sieciowe i streamuje output
+    linia po linii do logu joba (UI polluje /api/jobs/{id})."""
+    ok = True
+    proc = None
+    try:
+        JOBS.log(job, "$ " + " ".join(cmd))
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT,
+                                text=True, errors="replace")
+        watchdog = threading.Timer(NET_TOOL_TIMEOUT, proc.kill)
+        watchdog.start()
+        try:
+            for line in proc.stdout:
+                line = line.rstrip()
+                if line:
+                    JOBS.log(job, line)
+            rc = proc.wait()
+        finally:
+            timed_out = not watchdog.is_alive()
+            watchdog.cancel()
+        if timed_out:
+            JOBS.log(job, f"{tool_name}: przerwano po {NET_TOOL_TIMEOUT} s (timeout)")
+            ok = False
+        elif rc != 0:
+            JOBS.log(job, f"{tool_name}: zakończone kodem {rc}")
+            ok = False
+    except FileNotFoundError:
+        JOBS.log(job, f"Polecenie '{cmd[0]}' nie jest dostępne w tym środowisku "
+                      f"(w kontenerze wymaga pakietów iputils-ping / traceroute — "
+                      f"przebuduj obraz z aktualnego Dockerfile).")
+        ok = False
+    except Exception as e:  # noqa: BLE001
+        JOBS.log(job, f"BŁĄD: {e}")
+        ok = False
+    finally:
+        if proc and proc.poll() is None:
+            proc.kill()
+    if ok:
+        job.ok_count += 1
+    else:
+        job.fail_count += 1
+    JOBS.finish(job, ok)
+
+
+def _start_net_tool(device_name: str, mp: str, tool: str):
+    """Wspólny start dla ping/traceroute: host bierzemy z bazy urządzeń
+    (nie z parametru przeglądarki) — brak możliwości odpalenia narzędzia
+    na dowolnym adresie spoza bazy."""
+    with open_db_storage() as st:
+        db = _load_db(st, mp)
+        device = db.get(device_name)
+    if not device:
+        raise HTTPException(status_code=404, detail="Urządzenie nie istnieje")
+    if tool == "ping":
+        cmd, label = _ping_cmd(device.host), "Ping"
+    else:
+        cmd, label = _traceroute_cmd(device.host), "Traceroute"
+    job = JOBS.create(f"{label}: {device_name}")
+    JOBS.log(job, f"{label} do {device_name} ({device.host})")
+    threading.Thread(target=_run_net_tool_job, args=(job, cmd, label),
+                     daemon=True).start()
+    return {"status": "started", "job_id": job.id}
+
+
+@app.post("/api/ping/{device_name}")
+def ping_device(device_name: str, mp: str = Depends(get_master_password)):
+    return _start_net_tool(device_name, mp, "ping")
+
+
+@app.post("/api/traceroute/{device_name}")
+def traceroute_device(device_name: str, mp: str = Depends(get_master_password)):
+    return _start_net_tool(device_name, mp, "traceroute")
 
 
 @app.get("/api/jobs/{job_id}")

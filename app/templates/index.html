@@ -71,6 +71,14 @@
                     <p id="current-device-host" class="text-[#8b949e]"></p>
                 </div>
                 <div class="flex gap-x-2">
+                    <button onclick="pingSelectedDevice()" title="Ping (4 pakiety) — wynik w dzienniku zdarzeń"
+                            class="px-4 py-2 bg-[#21262d] border border-[#30363d] hover:bg-[#30363d] rounded-lg flex items-center gap-x-2 text-sm">
+                        <i class="fa-solid fa-satellite-dish"></i> <span>Ping</span>
+                    </button>
+                    <button onclick="tracerouteSelectedDevice()" title="Traceroute — wynik w dzienniku zdarzeń"
+                            class="px-4 py-2 bg-[#21262d] border border-[#30363d] hover:bg-[#30363d] rounded-lg flex items-center gap-x-2 text-sm">
+                        <i class="fa-solid fa-route"></i> <span>Traceroute</span>
+                    </button>
                     <button onclick="backupSelectedDevice()"
                             class="px-5 py-2 bg-[#1f6feb] hover:bg-[#388bfd] rounded-lg flex items-center gap-x-2 text-sm">
                         <i class="fa-solid fa-download"></i> <span>Backup teraz</span>
@@ -466,9 +474,10 @@
                     const job = await res.json();
                     // only new line
                     for (; shown < job.log.length; shown++) addLog(job.log[shown]);
-                    if (job.status !== 'running') {
+                    // statusy z jobs.py: "w trakcie" | "zakończone" | "błąd"
+                    if (job.status !== 'w trakcie') {
                         clearInterval(interval);
-                        if (job.status === 'done') {
+                        if (job.status === 'zakończone') {
                             addLog(`Zakończono: ${job.ok_count} OK`, 'success');
                         } else {
                             addLog(`Zakończono z błędami: ${job.ok_count} OK, ${job.fail_count} błędów`, 'error');
@@ -497,6 +506,27 @@
             const data = await res.json();
             pollJob(data.job_id, () => { if (currentDevice) loadVersions(currentDevice); });
         }
+
+        // ==================== NARZĘDZIA SIECIOWE ====================
+        // Ping/traceroute działają jak backup: serwer tworzy job, a UI
+        // dociąga kolejne linie outputu do dziennika zdarzeń na dole.
+        async function runNetTool(endpoint, label) {
+            if (!currentDevice) {
+                addLog("Najpierw wybierz urządzenie", "error");
+                return;
+            }
+            const res = await fetch(`/api/${endpoint}/${encodeURIComponent(currentDevice)}`, { method: 'POST' });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                addLog(err.detail || `Nie udało się uruchomić: ${label}`, "error");
+                return;
+            }
+            const data = await res.json();
+            pollJob(data.job_id);
+        }
+
+        function pingSelectedDevice() { runNetTool('ping', 'ping'); }
+        function tracerouteSelectedDevice() { runNetTool('traceroute', 'traceroute'); }
 
         // ==================== COMPARE ====================
         let diffPaths = null;
