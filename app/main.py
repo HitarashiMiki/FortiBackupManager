@@ -45,6 +45,7 @@ from .devicedb import (DeviceDB, Device, WrongPasswordError, DeviceDBError,
                        DBTooNewError, DB_FILENAME)
 from .fortigate import run_backup, device_backup_dir
 from .diff import make_diff_html
+from .changes import changed_flags, detect_and_log
 from .security import (SESSIONS, LOGIN_LIMITER, get_or_create_secret,
                        safe_backup_path, PathTraversalError)
 from .jobs import JOBS
@@ -464,6 +465,8 @@ def _run_backup_job(job, cfg: StorageConfig, mp: str, device_names: Optional[lis
                 try:
                     path = run_backup(dev, st, logger=lambda m: JOBS.log(job, m))
                     JOBS.log(job, f"[{dev.name}] OK → {path}")
+                    detect_and_log(st, device_backup_dir(st, dev), path,
+                                   lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}"))
                     job.ok_count += 1
                 except Exception as e:  # noqa: BLE001
                     JOBS.log(job, f"[{dev.name}] BŁĄD: {e}")
@@ -609,11 +612,13 @@ def list_versions(device_name: str, mp: str = Depends(get_master_password)):
     cfg = get_storage_config()
     with open_storage(cfg) as st:
         path = device_backup_dir(st, Device(name=device_name, host=""))
-        files = st.list_files(path)
+        files = [f for f in st.list_files(path) if not f.name.startswith(".")]
         files.sort(key=lambda f: f.name, reverse=True)
+        flags = changed_flags(st, path)
         return {"versions": [
             {"name": f.name, "path": f.path, "size": f.size,
-             "mtime": f.mtime.isoformat() if f.mtime else None}
+             "mtime": f.mtime.isoformat() if f.mtime else None,
+             "changed": flags.get(f.name)}
             for f in files
         ]}
 

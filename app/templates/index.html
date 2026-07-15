@@ -805,9 +805,16 @@
                     data.versions.forEach(version => {
                         const row = document.createElement('tr');
                         row.className = 'version-row';
+                        // zielona kropka = konfiguracja różni się od poprzedniej
+                        // wersji (porównanie z pominięciem pól ulotnych);
+                        // changed === null -> nie wiadomo (stare backupy), bez kropki
+                        const changedDot = version.changed
+                            ? `<span class="inline-block w-2 h-2 rounded-full bg-[#3fb950] ml-2 align-middle"
+                                     title="Konfiguracja zmieniła się względem poprzedniej wersji"></span>`
+                            : '';
                         row.innerHTML = `
                             <td class="px-3"><input type="checkbox" class="version-checkbox accent-[#1f6feb]" data-path="${version.path}"></td>
-                            <td class="px-3 py-2 font-mono text-xs">${version.name}</td>
+                            <td class="px-3 py-2 font-mono text-xs">${version.name}${changedDot}</td>
                             <td class="px-3 py-2 text-xs">${version.mtime ? new Date(version.mtime).toLocaleString('pl-PL') : '-'}</td>
                             <td class="px-3 py-2 text-right text-xs">${(version.size / 1024).toFixed(1)} KB</td>
                             <td class="px-3 py-2">
