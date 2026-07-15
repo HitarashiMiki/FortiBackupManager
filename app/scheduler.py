@@ -30,7 +30,8 @@ from typing import Dict, List, Optional, Tuple
 from .config import load_settings
 from .storage import open_storage, open_db_storage
 from .devicedb import DeviceDB, Device
-from .fortigate import run_backup
+from .fortigate import run_backup, device_backup_dir
+from .changes import detect_and_log
 from .jobs import JOBS
 
 TICK_SECONDS = 20            # co ile budzi się pętla
@@ -193,6 +194,8 @@ class Scheduler:
                 with open_storage(cfg) as st:
                     path = run_backup(dev, st, logger=lambda m: JOBS.log(job, m))
                     JOBS.log(job, f"[{dev.name}] OK → {path}")
+                    detect_and_log(st, device_backup_dir(st, dev), path,
+                                   lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}"))
                     job.ok_count += 1
             except Exception as e:  # noqa: BLE001
                 JOBS.log(job, f"[{dev.name}] BŁĄD: {e}")
