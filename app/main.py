@@ -33,6 +33,8 @@ import threading
 from typing import Optional
 
 from fastapi import FastAPI, Request, Form, HTTPException, Depends
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import (HTMLResponse, RedirectResponse, StreamingResponse,
                                PlainTextResponse, JSONResponse)
 from fastapi.templating import Jinja2Templates
@@ -53,6 +55,28 @@ from .jobs import JOBS
 from .scheduler import SCHEDULER
 
 app = FastAPI(title="FortiBackup Web", docs_url=None, redoc_url=None)
+
+
+@app.exception_handler(RequestValidationError)
+async def _form_validation_handler(request: Request, exc: RequestValidationError):
+    """Strony z formularzami HTML (/setup, /login) nie mogą odpowiadać
+    surowym JSON-em 422 — użytkownik ma dostać stronę z komunikatem.
+    Endpointy /api/* zachowują standardową odpowiedź JSON."""
+    path = request.url.path
+    if path.startswith("/setup"):
+        settings = load_settings()
+        logged = bool(SESSIONS.get_master_password(request.session.get("token")))
+        return templates.TemplateResponse(
+            request=request, name="setup.html",
+            context={"settings": settings, "configured": bool(settings.host),
+                     "logged": logged,
+                     "error": "Uzupełnij wymagane pola formularza."},
+            status_code=400)
+    if path == "/login":
+        return templates.TemplateResponse(
+            request=request, name="login.html",
+            context={"error": "Podaj hasło główne."}, status_code=400)
+    return await request_validation_exception_handler(request, exc)
 
 
 @app.exception_handler(DBTooNewError)
@@ -224,23 +248,31 @@ def save_setup(
     host: str = Form(...),
     port: int = Form(...),
     username: str = Form(...),
-    password: str = Form(...),
+    password: str = Form(""),      # puste przy edycji = zachowaj stare hasło
     base_path: str = Form("/fortibackup"),
     confirm_password: str = Form(""),
 ):
+    old = load_settings()
     if not _setup_authorized(request, confirm_password):
-        settings = load_settings()
         return templates.TemplateResponse(
             request=request, name="setup.html",
-            context={"settings": settings, "configured": True,
+            context={"settings": old, "configured": True,
                      "logged": False,
                      "error": "Błędne hasło magazynu kopi (albo limit prób — odczekaj minutę)."})
+    if not password and not old.password_obf:
+        # świeża instalacja — nie ma starego hasła, które można zachować
+        return templates.TemplateResponse(
+            request=request, name="setup.html",
+            context={"settings": old, "configured": bool(old.host),
+                     "logged": True,
+                     "error": "Podaj hasło do serwera magazynu."})
     settings = AppSettings(
         protocol=protocol,
         host=host.strip(),
         port=port,
         username=username.strip(),
-        password_obf=_obf(password),
+        # puste pole = bez zmian (ta sama konwencja co przy sekretach urządzeń)
+        password_obf=_obf(password) if password else old.password_obf,
         base_path=base_path.strip() or "/fortibackup",
     )
     save_settings(settings)

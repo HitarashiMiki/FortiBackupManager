@@ -53,8 +53,10 @@
                     <input type="text" name="username" required value="{{ settings.username }}" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
                 </div>
                 <div>
-                    <label class="block text-sm mb-1">Hasło (nowe)</label>
-                    <input type="password" name="password" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                    <label class="block text-sm mb-1">Hasło</label>
+                    <input type="password" name="password"
+                           {% if configured %}placeholder="puste = bez zmian"{% endif %}
+                           class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
                 </div>
             </div>
 
