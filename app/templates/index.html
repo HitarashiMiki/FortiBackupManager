@@ -258,6 +258,21 @@
         </div>
     </div>
 
+    <!-- MODAL WERYFIKACJI KONFIGURACJI -->
+    <div id="verify-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+        <div class="bg-[#161b22] border border-[#30363d] rounded-2xl w-[90%] max-w-3xl max-h-[85vh] flex flex-col modal">
+            <div class="flex justify-between items-center p-4 border-b border-[#30363d]">
+                <div class="flex items-center gap-x-4 min-w-0">
+                    <span class="font-semibold text-lg flex-shrink-0"><i class="fa-solid fa-list-check mr-2 text-[#1f6feb]"></i>Weryfikacja konfiguracji</span>
+                    <span id="verify-file" class="text-xs font-mono text-[#8b949e] truncate"></span>
+                    <span id="verify-counts" class="text-sm px-3 py-1 bg-[#21262d] rounded-full flex-shrink-0"></span>
+                </div>
+                <button onclick="closeVerifyModal()" class="text-3xl leading-none">&times;</button>
+            </div>
+            <div id="verify-content" class="flex-1 overflow-auto p-4 space-y-2 text-sm"></div>
+        </div>
+    </div>
+
     <!-- Device Change Folder -->
     <div id="move-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
         <div class="bg-[#161b22] border border-[#30363d] rounded-2xl w-full max-w-sm modal">
@@ -819,6 +834,7 @@
                             <td class="px-3 py-2 text-right text-xs">${(version.size / 1024).toFixed(1)} KB</td>
                             <td class="px-3 py-2">
                                 <div class="flex justify-end gap-x-2 text-[#1f6feb]">
+                                    <button onclick="verifyVersion('${version.path}')" title="Weryfikuj konfigurację" class="hover:text-white"><i class="fa-solid fa-list-check"></i></button>
                                     <button onclick="viewVersion('${version.path}')" class="hover:text-white"><i class="fa-solid fa-eye"></i></button>
                                     <button onclick="downloadVersion('${version.path}')" class="hover:text-white"><i class="fa-solid fa-download"></i></button>
                                     <button onclick="deleteVersion('${version.path}', '${version.name}')" class="hover:text-red-400"><i class="fa-solid fa-trash"></i></button>
@@ -831,6 +847,66 @@
             }
         function refreshVersions() { if (currentDevice) loadVersions(currentDevice); }
         function viewVersion(path) { window.open(`/api/view/${encodeURIComponent(path)}`, '_blank'); }
+
+        // ==================== WERYFIKACJA KONFIGURACJI ====================
+        // Style per poziom uwagi — zgodnie z audit.py: error / warning / info
+        const VERIFY_STYLES = {
+            error:   { box: 'border-red-700 bg-red-900/20 text-red-400',        icon: 'fa-circle-xmark' },
+            warning: { box: 'border-[#9e6a03] bg-[#3c2a13]/60 text-[#d29922]',  icon: 'fa-triangle-exclamation' },
+            info:    { box: 'border-[#30363d] bg-[#0d1117] text-[#8b949e]',     icon: 'fa-circle-info' },
+        };
+
+        async function verifyVersion(path) {
+            addLog("Weryfikuję konfigurację...");
+            const res = await fetch(`/api/verify/${encodeURIComponent(path)}`);
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                addLog(err.detail || "Błąd weryfikacji", "error");
+                return;
+            }
+            const data = await res.json();
+            document.getElementById('verify-file').textContent = data.file;
+            const c = data.counts || {};
+            document.getElementById('verify-counts').textContent =
+                `${c.error || 0} błędów • ${c.warning || 0} ostrzeżeń • ${c.info || 0} info`;
+
+            const content = document.getElementById('verify-content');
+            content.innerHTML = '';
+            if (!data.findings || data.findings.length === 0) {
+                content.innerHTML = `<div class="border border-[#238636] bg-[#12361f]/60 text-[#3fb950] rounded-lg px-4 py-3">
+                    <i class="fa-solid fa-circle-check mr-2"></i>Brak uwag do tej konfiguracji.</div>`;
+            } else {
+                data.findings.forEach(f => {
+                    const s = VERIFY_STYLES[f.level] || VERIFY_STYLES.info;
+                    const div = document.createElement('div');
+                    div.className = `border rounded-lg px-4 py-3 flex items-start gap-x-3 ${s.box}`;
+                    const icon = document.createElement('i');
+                    icon.className = `fa-solid ${s.icon} mt-0.5`;
+                    const body = document.createElement('div');
+                    body.className = 'flex-1 min-w-0';
+                    const msg = document.createElement('div');
+                    msg.textContent = f.message;
+                    body.appendChild(msg);
+                    if (f.line) {
+                        const ln = document.createElement('div');
+                        ln.className = 'text-xs opacity-70 mt-0.5';
+                        ln.textContent = `linia ${f.line}`;
+                        body.appendChild(ln);
+                    }
+                    div.append(icon, body);
+                    content.appendChild(div);
+                });
+            }
+            const modal = document.getElementById('verify-modal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+
+        function closeVerifyModal() {
+            const modal = document.getElementById('verify-modal');
+            modal.classList.remove('flex');
+            modal.classList.add('hidden');
+        }
         function downloadVersion(path) { window.location.href = `/api/download/${encodeURIComponent(path)}`; }
         async function deleteVersion(path, name) {
             if (!confirm(`Usunąć ${name}?`)) return;
