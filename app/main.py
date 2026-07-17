@@ -46,6 +46,7 @@ from .devicedb import (DeviceDB, Device, WrongPasswordError, DeviceDBError,
 from .fortigate import run_backup, device_backup_dir
 from .diff import make_diff_html
 from .changes import changed_flags, detect_and_log
+from .audit import run_audit
 from .security import (SESSIONS, LOGIN_LIMITER, get_or_create_secret,
                        safe_backup_path, PathTraversalError)
 from .jobs import JOBS
@@ -638,6 +639,21 @@ def view_file(path: str, mp: str = Depends(get_master_password)):
     with open_storage(cfg) as st:
         content = st.download_bytes(norm).decode("utf-8", errors="replace")
     return PlainTextResponse(content)
+
+
+@app.get("/api/verify/{path:path}")
+def verify_file(path: str, mp: str = Depends(get_master_password)):
+    """Weryfikacja zawartości configu (moduł audit) — zwraca listę uwag
+    z poziomami error/warning/info do wyświetlenia w modalu."""
+    norm = _validated_path(path)
+    cfg = get_storage_config()
+    with open_storage(cfg) as st:
+        content = st.download_bytes(norm).decode("utf-8", errors="replace")
+    findings = run_audit(content)
+    return {"file": posixpath.basename(norm),
+            "findings": findings,
+            "counts": {lvl: sum(1 for f in findings if f["level"] == lvl)
+                       for lvl in ("error", "warning", "info")}}
 
 
 @app.get("/api/download/{path:path}")
