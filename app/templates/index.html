@@ -807,7 +807,14 @@
 
         function loadVersions(deviceName) {
             fetch(`/api/versions/${deviceName}`)
-                .then(r => r.json())
+                .then(async r => {
+                    if (!r.ok) {
+                        // np. 502 = problem z magazynem (złe hasło, brak połączenia)
+                        const err = await r.json().catch(() => ({}));
+                        throw new Error(err.detail || `Błąd pobierania wersji (HTTP ${r.status})`);
+                    }
+                    return r.json();
+                })
                 .then(data => {
                     const tbody = document.getElementById('versions-table');
                     tbody.innerHTML = '';
@@ -843,6 +850,12 @@
                         `;
                         tbody.appendChild(row);
                     });
+                })
+                .catch(err => {
+                    addLog(err.message || "Błąd pobierania wersji", "error");
+                    const tbody = document.getElementById('versions-table');
+                    tbody.innerHTML = `<tr><td colspan="5" class="px-4 py-8 text-center text-red-400">
+                        <i class="fa-solid fa-triangle-exclamation mr-2"></i>${err.message || "Błąd pobierania wersji"}</td></tr>`;
                 });
             }
         function refreshVersions() { if (currentDevice) loadVersions(currentDevice); }
