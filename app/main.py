@@ -79,6 +79,13 @@ async def _form_validation_handler(request: Request, exc: RequestValidationError
     return await request_validation_exception_handler(request, exc)
 
 
+@app.exception_handler(StorageError)
+def _storage_error_handler(request: Request, exc: StorageError):
+    # Problemy z magazynem (złe hasło, host nieosiągalny) nie mogą kończyć
+    # się nagim 500 bez treści — UI dostaje komunikat do dziennika zdarzeń.
+    return JSONResponse(status_code=502, content={"detail": f"Magazyn: {exc}"})
+
+
 @app.exception_handler(DBTooNewError)
 def _db_too_new_handler(request: Request, exc: DBTooNewError):
     # 426 Upgrade Required — jeden punkt obsługi dla WSZYSTKICH endpointów
@@ -275,6 +282,20 @@ def save_setup(
         password_obf=_obf(password) if password else old.password_obf,
         base_path=base_path.strip() or "/fortibackup",
     )
+    # Test połączenia PRZED zapisem — złe hasło/host ma wyskoczyć tutaj,
+    # z czytelnym komunikatem, a nie dopiero przy pierwszym backupie.
+    # ensure_dir łapie też pułapkę chroota (korzeń read-only).
+    try:
+        cfg = settings.to_storage_config()
+        with open_storage(cfg) as st:
+            st.ensure_dir(cfg.base_path)
+    except StorageError as e:
+        logged = bool(SESSIONS.get_master_password(request.session.get("token")))
+        return templates.TemplateResponse(
+            request=request, name="setup.html",
+            context={"settings": settings, "configured": bool(old.host),
+                     "logged": logged,
+                     "error": f"Połączenie z magazynem nie powiodło się — nic nie zapisano. {e}"})
     save_settings(settings)
     SCHEDULER.refresh()
     return RedirectResponse("/login", status_code=HTTP_302_FOUND)
