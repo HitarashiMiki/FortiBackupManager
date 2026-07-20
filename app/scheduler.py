@@ -195,7 +195,8 @@ class Scheduler:
                     path = run_backup(dev, st, logger=lambda m: JOBS.log(job, m))
                     JOBS.log(job, f"[{dev.name}] OK → {path}")
                     detect_and_log(st, device_backup_dir(st, dev), path,
-                                   lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}"))
+                                   lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}"),
+                                   device=dev)
                     job.ok_count += 1
             except Exception as e:  # noqa: BLE001
                 JOBS.log(job, f"[{dev.name}] BŁĄD: {e}")

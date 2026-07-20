@@ -72,10 +72,50 @@ def record_change_flag(storage: RemoteStorage, device_dir: str,
     return changed
 
 
+def record_device_identity(storage: RemoteStorage, device_dir: str,
+                           device) -> None:
+    """Zapisuje w meta katalogu tożsamość urządzenia (nazwa + host).
+    Dzięki temu po utracie bazy urządzeń da się dopasować katalogi backupów
+    do ponownie dodanych urządzeń po ADRESIE, nie tylko po nazwie."""
+    meta = load_meta(storage, device_dir)
+    ident = {"name": device.name, "host": device.host}
+    if meta.get("device") != ident:
+        meta["device"] = ident
+        _save_meta(storage, device_dir, meta)
+
+
+def find_backup_dir_for_host(storage: RemoteStorage, backups_root: str,
+                             host: str, claimed) -> Optional[str]:
+    """Szuka osieroconego katalogu backupów (spoza `claimed`), którego meta
+    wskazuje ten sam host. Przy wielu kandydatach (np. stare katalogi po
+    zmianach nazwy) wygrywa ten z najświeższym backupiem."""
+    candidates = []
+    for d in storage.list_dirs(backups_root):
+        if d in claimed:
+            continue
+        meta = load_meta(storage, posixpath.join(backups_root, d))
+        if (meta.get("device") or {}).get("host") != host:
+            continue
+        files = [f.name for f in storage.list_files(posixpath.join(backups_root, d))
+                 if not f.name.startswith(".")]
+        if files:
+            # nazwy niosą timestamp — max = najnowszy backup
+            candidates.append((max(files), d))
+    if not candidates:
+        return None
+    return max(candidates)[1]
+
+
 def detect_and_log(storage: RemoteStorage, device_dir: str, new_path: str,
-                   log) -> None:
-    """Wrapper dla jobów backupu: porównaj, zaloguj, 
-    nieudana detekcja zmian nie może unieważnić udanego backupu."""
+                   log, device=None) -> None:
+    """Wrapper dla jobów backupu: porównaj, zaloguj,
+    nieudana detekcja zmian nie może unieważnić udanego backupu.
+    Przy okazji odświeża tożsamość urządzenia w meta (patrz wyżej)."""
+    if device is not None:
+        try:
+            record_device_identity(storage, device_dir, device)
+        except Exception as e:  # noqa: BLE001
+            log(f"Nie udało się zapisać metadanych urządzenia: {e}")
     try:
         changed = record_change_flag(storage, device_dir, new_path)
     except Exception as e:  # noqa: BLE001

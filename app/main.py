@@ -45,9 +45,9 @@ from .config import load_settings, save_settings, AppSettings, _obf
 from .storage import open_storage, open_db_storage, StorageConfig, StorageError
 from .devicedb import (DeviceDB, Device, WrongPasswordError, DeviceDBError,
                        DBTooNewError, DB_FILENAME)
-from .fortigate import run_backup, device_backup_dir
+from .fortigate import run_backup, device_backup_dir, sanitize_name, BACKUP_DIR
 from .diff import make_diff_html
-from .changes import changed_flags, detect_and_log
+from .changes import changed_flags, detect_and_log, find_backup_dir_for_host
 from .audit import run_audit
 from .security import (SESSIONS, LOGIN_LIMITER, get_or_create_secret,
                        safe_backup_path, PathTraversalError)
@@ -380,10 +380,50 @@ def add_device(
         )
         try:
             db.upsert(device)
-            SCHEDULER.refresh()
-            return {"status": "ok", "message": f"Dodano urządzenie: {device.name}"}
         except DeviceDBError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        SCHEDULER.refresh()
+        message = f"Dodano urządzenie: {device.name}"
+        # Best-effort: jeśli na magazynie leżą osierocone backupy tego hosta
+        # (odtwarzanie po utracie bazy urządzeń), przypnij je. Błąd magazynu
+        # nie może zablokować dodania urządzenia.
+        try:
+            attached = _attach_orphan_backups(db, device)
+            if attached:
+                message += " " + attached
+        except Exception:  # noqa: BLE001
+            pass
+        return {"status": "ok", "message": message}
+
+
+def _attach_orphan_backups(db: DeviceDB, device: Device) -> str:
+    """Dopasowanie backupów przy (ponownym) dodaniu urządzenia.
+
+    1) Katalog o pasującej nazwie z plikami -> nic nie trzeba robić,
+       działa dotychczasowe dopasowanie po nazwie (raportujemy znalezisko).
+    2) Inaczej: szukamy katalogu, którego .fbk-meta.json wskazuje ten sam
+       host — nazwy urządzeń po odtworzeniu bazy nikt nie pamięta, adresy są
+       w dokumentacji sieci. Trafienie przypinamy przez Device.backup_dir."""
+    settings = load_settings()
+    if not settings.host:
+        return ""
+    with open_storage(settings.to_storage_config()) as rst:
+        own_dir = device_backup_dir(rst, device)
+        own = [f for f in rst.list_files(own_dir) if not f.name.startswith(".")]
+        if own:
+            return f"Znaleziono istniejące backupy o tej nazwie ({len(own)} wersji)."
+        root = rst.join(BACKUP_DIR)
+        claimed = {sanitize_name(d.backup_dir or d.name)
+                   for d in db.devices if d.name != device.name}
+        found = find_backup_dir_for_host(rst, root, device.host, claimed)
+        if not found:
+            return ""
+        count = len([f for f in rst.list_files(posixpath.join(root, found))
+                     if not f.name.startswith(".")])
+    device.backup_dir = found
+    db.upsert(device, old_name=device.name)
+    return (f"Dopasowano istniejące backupy po adresie {device.host} "
+            f"(katalog '{found}', {count} wersji).")
 
 
 @app.get("/api/devices/{name}")
@@ -432,6 +472,10 @@ def update_device(
             description=description.strip(),
             folder=_validate_folder(db, folder),
             extra=old.extra,
+            # zmiana nazwy nie może gubić historii: przypnij dotychczasowy
+            # katalog backupów (jawny, a gdy go nie było — pochodną starej nazwy)
+            backup_dir=(old.backup_dir if new_name.strip() == old.name
+                        else old.backup_dir or sanitize_name(old.name)),
             sched_enabled=sched_enabled, sched_mode=sched_mode,
             sched_every_hours=sched_every_hours, sched_time=sched_time.strip(),
             sched_weekday=sched_weekday,
@@ -520,7 +564,8 @@ def _run_backup_job(job, cfg: StorageConfig, mp: str, device_names: Optional[lis
                     path = run_backup(dev, st, logger=lambda m: JOBS.log(job, m))
                     JOBS.log(job, f"[{dev.name}] OK → {path}")
                     detect_and_log(st, device_backup_dir(st, dev), path,
-                                   lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}"))
+                                   lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}"),
+                                   device=dev)
                     job.ok_count += 1
                 except Exception as e:  # noqa: BLE001
                     JOBS.log(job, f"[{dev.name}] BŁĄD: {e}")
@@ -664,8 +709,13 @@ def jobs_recent(mp: str = Depends(get_master_password)):
 @app.get("/api/versions/{device_name}")
 def list_versions(device_name: str, mp: str = Depends(get_master_password)):
     cfg = get_storage_config()
+    # realne urządzenie z bazy — honoruje przypięty katalog (backup_dir);
+    # fallback na nazwę pozwala obejrzeć katalog nieistniejącego już urządzenia
+    with open_db_storage() as dbst:
+        device = _load_db(dbst, mp).get(device_name)
+    device = device or Device(name=device_name, host="")
     with open_storage(cfg) as st:
-        path = device_backup_dir(st, Device(name=device_name, host=""))
+        path = device_backup_dir(st, device)
         files = [f for f in st.list_files(path) if not f.name.startswith(".")]
         files.sort(key=lambda f: f.name, reverse=True)
         flags = changed_flags(st, path)
