@@ -35,7 +35,9 @@ def build_backup_filename(device: Device, when: Optional[datetime] = None) -> st
 
 
 def device_backup_dir(storage: RemoteStorage, device: Device) -> str:
-    return storage.join(BACKUP_DIR, sanitize_name(device.name))
+    # backup_dir przypina urządzenie do katalogu o innej nazwie niż samo
+    # urządzenie (odtworzona baza / zmiana nazwy) — patrz Device.backup_dir
+    return storage.join(BACKUP_DIR, sanitize_name(device.backup_dir or device.name))
 
 
 # ======================== SSH PUSH ========================

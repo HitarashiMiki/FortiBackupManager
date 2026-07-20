@@ -65,6 +65,11 @@ class Device:
     sched_time: str = "02:00"        # dla daily/weekly (HH:MM)
     sched_weekday: int = 0           # dla weekly (0 = poniedziałek)
     folder: str = ""
+    # Nazwa katalogu z backupami na magazynie ("" = pochodna nazwy urządzenia,
+    # jak dotychczas). Ustawiane, gdy backupy trzeba przypiąć do katalogu
+    # o INNEJ nazwie: odtwarzanie bazy urządzeń (dopasowanie po hoście
+    # z .fbk-meta.json) albo zmiana nazwy urządzenia (ciągłość historii).
+    backup_dir: str = ""
     # Pola nieznane tej wersji programu (dopisane przez nowszą, kompatybilną
     # wersję) — przechowywane i oddawane przy zapisie, żeby edycja starszą
     # wersją nie wycinała cudzych danych.

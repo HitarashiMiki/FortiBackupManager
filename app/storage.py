@@ -64,6 +64,7 @@ class RemoteStorage:
     def close(self) -> None: ...
     def ensure_dir(self, path: str) -> None: ...
     def list_files(self, path: str) -> List[RemoteFile]: ...
+    def list_dirs(self, path: str) -> List[str]: ...
     def upload_bytes(self, data: bytes, path: str) -> None: ...
     def download_bytes(self, path: str) -> bytes: ...
     def delete(self, path: str) -> None: ...
@@ -164,6 +165,13 @@ class SFTPStorage(RemoteStorage):
                 mtime=datetime.fromtimestamp(a.st_mtime) if a.st_mtime else None,
             ))
         return out
+
+    def list_dirs(self, path: str) -> List[str]:
+        try:
+            entries = self._sftp.listdir_attr(path)
+        except FileNotFoundError:
+            return []
+        return [a.filename for a in entries if stat.S_ISDIR(a.st_mode or 0)]
 
     def upload_bytes(self, data: bytes, path: str) -> None:
         self.ensure_dir(posixpath.dirname(path))
@@ -281,6 +289,31 @@ class FTPStorage(RemoteStorage):
             raise StorageError(f"Błąd listowania {path}: {e}") from e
         return out
 
+    def list_dirs(self, path: str) -> List[str]:
+        # preferuj MLSD (jednoznaczny typ wpisu); fallback: NLST + próba CWD
+        try:
+            return [name for name, facts in self._ftp.mlsd(path)
+                    if facts.get("type") == "dir" and name not in (".", "..")]
+        except ftplib.all_errors:
+            pass
+        out: List[str] = []
+        try:
+            names = self._ftp.nlst(path)
+        except ftplib.all_errors:
+            return []
+        cur = self._ftp.pwd()
+        for name in names:
+            base = posixpath.basename(name.rstrip("/"))
+            if base in (".", ".."):
+                continue
+            try:
+                self._ftp.cwd(posixpath.join(path, base))
+                out.append(base)
+                self._ftp.cwd(cur)
+            except ftplib.all_errors:
+                continue  # plik, nie katalog
+        return out
+
     def upload_bytes(self, data: bytes, path: str) -> None:
         self.ensure_dir(posixpath.dirname(path))
         try:
@@ -348,6 +381,13 @@ class LocalStorage(RemoteStorage):
                     name=f.name, path=str(f), size=st.st_size,
                     mtime=datetime.fromtimestamp(st.st_mtime)))
         return out
+
+    def list_dirs(self, path: str) -> List[str]:
+        from pathlib import Path
+        p = Path(path)
+        if not p.is_dir():
+            return []
+        return [f.name for f in p.iterdir() if f.is_dir()]
 
     def upload_bytes(self, data: bytes, path: str) -> None:
         from pathlib import Path
