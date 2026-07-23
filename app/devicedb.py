@@ -32,6 +32,18 @@ DB_TOO_NEW_MSG = (
     "bezpowrotnie usunąć dane."
 )
 
+# Paleta kolorów folderów (do priorytetyzacji/organizacji). Pusty kolor =
+# domyślny (bursztyn w UI). Walidacja server-side ogranicza wartości do tej
+# listy — nie chcemy dowolnego stringa lądującego w atrybucie stylu.
+FOLDER_COLORS = ("#8b949e", "#f85149", "#db6d28", "#d29922",
+                 "#3fb950", "#1f6feb", "#a371f7", "#db61a2", "#39c5cf")
+
+
+def normalize_folder_color(color: str) -> str:
+    """Zwraca kolor z palety (małe litery) albo "" dla pustego/nieznanego."""
+    color = (color or "").strip().lower()
+    return color if color in FOLDER_COLORS else ""
+
 
 class DeviceDBError(Exception):
     pass
@@ -101,17 +113,21 @@ def _derive_key(password: str, salt: bytes) -> bytes:
 
 def encrypt_db(devices: List[Device], password: str, salt: Optional[bytes] = None,
                folders: Optional[List[str]] = None,
+               folder_colors: Optional[dict] = None,
                extra: Optional[dict] = None) -> bytes:
     salt = salt or os.urandom(SALT_LEN)
     key = _derive_key(password, salt)
-    data = dict(extra or {}) 
+    data = dict(extra or {})
     data.update({
         "version": DB_SCHEMA_VERSION,
         # Minimalna wersja schematu, jaką musi rozumieć program, żeby móc
-        # bezpiecznie CZYTAĆ I ZAPISYWAĆ tę bazę.
+        # bezpiecznie CZYTAĆ I ZAPISYWAĆ tę bazę. Kolory folderów to dodatek
+        # czysto kosmetyczny — stary klient FBK2 przechowa je przez `extra`,
+        # więc NIE podbijamy min_reader_version.
         "min_reader_version": 2,
         "devices": [d.to_dict() for d in devices],
         "folders": sorted(set(folders or []), key=str.lower),
+        "folder_colors": dict(folder_colors or {}),
     })
     payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
     token = Fernet(key).encrypt(payload)
@@ -159,6 +175,7 @@ class DeviceDB:
         self.password = password
         self.devices: List[Device] = []
         self.folders: List[str] = []
+        self.folder_colors: Dict[str, str] = {}   # nazwa folderu -> hex koloru
         self._extra: dict = {}
         self._salt: Optional[bytes] = None
 
@@ -172,9 +189,12 @@ class DeviceDB:
         folders = set(data.get("folders", []))
         folders.update(d.folder for d in self.devices if d.folder)
         self.folders = sorted(folders, key=str.lower)
+        colors = data.get("folder_colors") or {}
+        # tylko kolory istniejących folderów (porządki po skasowanych)
+        self.folder_colors = {f: c for f, c in colors.items() if f in folders}
         self._extra = {k: v for k, v in data.items()
                        if k not in ("version", "min_reader_version",
-                                    "devices", "folders")}
+                                    "devices", "folders", "folder_colors")}
 
     def load_or_create(self) -> bool:
         self.storage.ensure_dir(self.storage.cfg.base_path)
@@ -190,7 +210,8 @@ class DeviceDB:
 
     def save(self) -> None:
         blob = encrypt_db(self.devices, self.password, self._salt,
-                          folders=self.folders, extra=self._extra)
+                          folders=self.folders, folder_colors=self.folder_colors,
+                          extra=self._extra)
         if self._salt is None:
             self._salt = blob[len(MAGIC):len(MAGIC) + SALT_LEN]
         self.storage.upload_bytes(blob, self.remote_path)
@@ -230,7 +251,7 @@ class DeviceDB:
 
     # -- foldery ---------------------------------------------------------------
 
-    def add_folder(self, name: str) -> None:
+    def add_folder(self, name: str, color: str = "") -> None:
         try:
             self.reload()
         except StorageError:
@@ -242,6 +263,23 @@ class DeviceDB:
             raise DeviceDBError(f"Folder '{name}' już istnieje.")
         self.folders.append(name)
         self.folders.sort(key=str.lower)
+        color = normalize_folder_color(color)
+        if color:
+            self.folder_colors[name] = color
+        self.save()
+
+    def set_folder_color(self, name: str, color: str) -> None:
+        try:
+            self.reload()
+        except StorageError:
+            pass
+        if name not in self.folders:
+            raise DeviceDBError(f"Folder '{name}' nie istnieje.")
+        color = normalize_folder_color(color)
+        if color:
+            self.folder_colors[name] = color
+        else:
+            self.folder_colors.pop(name, None)   # pusty = kolor domyślny
         self.save()
 
     def remove_folder(self, name: str) -> int:
@@ -258,6 +296,7 @@ class DeviceDB:
                 d.folder = ""
                 moved += 1
         self.folders = [f for f in self.folders if f != name]
+        self.folder_colors.pop(name, None)
         self.save()
         return moved
 

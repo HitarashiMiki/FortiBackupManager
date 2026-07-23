@@ -273,6 +273,31 @@
         </div>
     </div>
 
+    <!-- MODAL NOWEGO FOLDERU (nazwa + kolor) -->
+    <div id="folder-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+        <div class="bg-[#161b22] border border-[#30363d] rounded-2xl w-full max-w-sm modal">
+            <div class="flex justify-between items-center px-6 py-4 border-b border-[#30363d]">
+                <h3 class="text-lg font-semibold"><i class="fa-solid fa-folder-plus mr-2 text-[#1f6feb]"></i>Nowy folder</h3>
+                <button onclick="closeFolderModal()" class="text-3xl leading-none">&times;</button>
+            </div>
+            <div class="p-6 space-y-4">
+                <div>
+                    <label class="block text-sm mb-1.5">Nazwa folderu</label>
+                    <input type="text" id="folder-name" onkeydown="if(event.key==='Enter')submitFolder()"
+                           class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5">
+                </div>
+                <div>
+                    <label class="block text-sm mb-2">Kolor</label>
+                    <div id="folder-color-swatches"></div>
+                </div>
+                <div class="flex justify-end gap-x-3 pt-2">
+                    <button type="button" onclick="closeFolderModal()" class="px-5 py-2.5 rounded-lg border border-[#30363d]">Anuluj</button>
+                    <button type="button" onclick="submitFolder()" class="px-6 py-2.5 bg-[#1f6feb] hover:bg-[#388bfd] rounded-lg font-semibold">Utwórz</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Device Change Folder -->
     <div id="move-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
         <div class="bg-[#161b22] border border-[#30363d] rounded-2xl w-full max-w-sm modal">
@@ -298,6 +323,9 @@
         let currentDevice = null;
         let isEditMode = false;
         let allFolders = [];
+        let folderColors = {};                 // nazwa folderu -> hex koloru
+        let folderPalette = [];                // dozwolone kolory (z API)
+        const DEFAULT_FOLDER_COLOR = '#d29922'; // bursztyn, gdy folder bez koloru
         // let browser remember what folders were collapsed
         let collapsedFolders = new Set(JSON.parse(localStorage.getItem('fbk-collapsed-folders') || '[]'));
 
@@ -597,7 +625,9 @@
         function renderDeviceRow(device, indented) {
             const selected = currentDevice === device.name;
             const div = document.createElement('div');
-            div.className = `group px-3 py-3 rounded-xl mb-1 flex justify-between items-center hover:bg-[#161b22] cursor-pointer ${indented ? 'ml-4' : ''} ${selected ? 'bg-[#1f6feb] text-white' : ''}`;
+            div.className = `group px-3 py-3 rounded-xl mb-1 flex justify-between items-center hover:bg-[#161b22] cursor-pointer ${indented ? 'ml-4 border-l-2' : ''} ${selected ? 'bg-[#1f6feb] text-white' : ''}`;
+            // urządzenie w folderze dostaje lewy akcent w kolorze folderu
+            if (indented && device.folder) div.style.borderLeftColor = folderColor(device.folder);
 
             const info = document.createElement('div');
             info.className = 'flex-1 min-w-0';
@@ -637,28 +667,46 @@
             return div;
         }
 
+        function folderColor(folder) {
+            return folderColors[folder] || DEFAULT_FOLDER_COLOR;
+        }
+
         function renderFolderHeader(folder, count) {
             const collapsed = collapsedFolders.has(folder);
+            const color = folderColor(folder);
             const div = document.createElement('div');
-            div.className = 'group px-3 py-2 rounded-lg mb-1 flex justify-between items-center hover:bg-[#161b22] cursor-pointer select-none';
+            div.className = 'group px-3 py-2 rounded-lg mb-1 flex justify-between items-center hover:bg-[#161b22] cursor-pointer select-none border-l-4';
+            // lewy akcent w kolorze folderu — czytelny nawet po zwinięciu
+            div.style.borderLeftColor = color;
 
             const label = document.createElement('div');
             label.className = 'flex items-center gap-x-2 flex-1 min-w-0 text-sm font-medium';
-            label.innerHTML = `<i class="fa-solid fa-chevron-${collapsed ? 'right' : 'down'} text-xs text-[#8b949e] w-3"></i>
-                               <i class="fa-solid fa-folder${collapsed ? '' : '-open'} text-[#d29922]"></i>`;
+            const chevron = document.createElement('i');
+            chevron.className = `fa-solid fa-chevron-${collapsed ? 'right' : 'down'} text-xs text-[#8b949e] w-3`;
+            const folderIcon = document.createElement('i');
+            folderIcon.className = `fa-solid fa-folder${collapsed ? '' : '-open'}`;
+            folderIcon.style.color = color;
             const nameSpan = document.createElement('span');
             nameSpan.className = 'truncate';
             nameSpan.textContent = folder;
             const countSpan = document.createElement('span');
             countSpan.className = 'text-xs text-[#8b949e]';
             countSpan.textContent = `(${count})`;
-            label.append(nameSpan, countSpan);
+            label.append(chevron, folderIcon, nameSpan, countSpan);
 
+            const actions = document.createElement('div');
+            actions.className = 'flex gap-x-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0';
+            const paint = document.createElement('button');
+            paint.className = 'px-2 py-1 text-[#8b949e] hover:text-white';
+            paint.title = 'Zmień kolor folderu';
+            paint.innerHTML = '<i class="fa-solid fa-palette text-xs"></i>';
+            paint.onclick = (e) => { e.stopPropagation(); openColorPopup(e.currentTarget, folder); };
             const del = document.createElement('button');
-            del.className = 'px-2 py-1 text-[#8b949e] hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity';
+            del.className = 'px-2 py-1 text-[#8b949e] hover:text-red-400';
             del.title = 'Usuń folder (urządzenia nie zostaną usunięte)';
             del.innerHTML = '<i class="fa-solid fa-trash text-xs"></i>';
             del.onclick = (e) => { e.stopPropagation(); deleteFolder(folder); };
+            actions.append(paint, del);
 
             div.onclick = () => {
                 if (collapsedFolders.has(folder)) collapsedFolders.delete(folder);
@@ -666,8 +714,67 @@
                 localStorage.setItem('fbk-collapsed-folders', JSON.stringify([...collapsedFolders]));
                 loadDevices();
             };
-            div.append(label, del);
+            div.append(label, actions);
             return div;
+        }
+
+        // ==================== KOLORY FOLDERÓW ====================
+        // Buduje rząd próbek koloru; onPick(hex) dostaje '' dla opcji domyślnej
+        function buildSwatches(selected, onPick) {
+            const wrap = document.createElement('div');
+            wrap.className = 'flex flex-wrap gap-2';
+            const mk = (hex, isDefault) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'w-6 h-6 rounded-full border-2 flex items-center justify-center';
+                b.style.backgroundColor = isDefault ? 'transparent' : hex;
+                const active = isDefault ? !selected : (selected === hex);
+                b.style.borderColor = active ? '#ffffff' : '#30363d';
+                b.title = isDefault ? 'Domyślny (bursztyn)' : hex;
+                if (isDefault) b.innerHTML = '<i class="fa-solid fa-ban text-xs text-[#8b949e]"></i>';
+                b.onclick = () => onPick(isDefault ? '' : hex);
+                return b;
+            };
+            wrap.appendChild(mk('', true));
+            folderPalette.forEach(hex => wrap.appendChild(mk(hex, false)));
+            return wrap;
+        }
+
+        // Popup przy przycisku palety — szybka zmiana koloru istniejącego folderu
+        let colorPopupEl = null;
+        function closeColorPopup() {
+            if (colorPopupEl) { colorPopupEl.remove(); colorPopupEl = null; }
+            document.removeEventListener('click', closeColorPopup);
+        }
+        function openColorPopup(anchor, folder) {
+            closeColorPopup();
+            const pop = document.createElement('div');
+            pop.className = 'fixed z-50 bg-[#161b22] border border-[#30363d] rounded-xl p-3 shadow-xl';
+            pop.onclick = (e) => e.stopPropagation();
+            const r = anchor.getBoundingClientRect();
+            pop.style.top = `${r.bottom + 6}px`;
+            pop.style.left = `${Math.max(8, r.right - 180)}px`;
+            pop.style.width = '180px';
+            pop.appendChild(buildSwatches(folderColors[folder] || '', async (hex) => {
+                closeColorPopup();
+                await setFolderColor(folder, hex);
+            }));
+            document.body.appendChild(pop);
+            colorPopupEl = pop;
+            // zamknięcie kliknięciem poza popupem (po bieżącym zdarzeniu)
+            setTimeout(() => document.addEventListener('click', closeColorPopup), 0);
+        }
+
+        async function setFolderColor(folder, hex) {
+            const formData = new FormData();
+            formData.append('color', hex);
+            const res = await fetch(`/api/folders/${encodeURIComponent(folder)}/color`, { method: 'POST', body: formData });
+            if (res.ok) {
+                loadDevices();
+            } else if (!handleDbTooNew(res)) {
+                const err = await res.json().catch(() => ({}));
+                addLog(err.detail || 'Błąd zmiany koloru', 'error');
+            }
         }
 
         function loadDevices() {
@@ -679,6 +786,8 @@
                 })
                 .then(data => {
                     allFolders = data.folders || [];
+                    folderColors = data.folder_colors || {};
+                    folderPalette = data.palette || [];
                     const devices = data.devices || [];
                     const container = document.getElementById('devices-list');
                     container.innerHTML = '';
@@ -713,15 +822,44 @@
         }
 
         // ==================== FOLDERS ====================
-        async function createFolder() {
-            const name = prompt('Nazwa:');
-            if (!name || !name.trim()) return;
+        let newFolderColor = '';   // '' = domyślny
+
+        function createFolder() {
+            newFolderColor = '';
+            document.getElementById('folder-name').value = '';
+            refreshNewFolderSwatches();
+            const modal = document.getElementById('folder-modal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            setTimeout(() => document.getElementById('folder-name').focus(), 50);
+        }
+
+        function refreshNewFolderSwatches() {
+            const box = document.getElementById('folder-color-swatches');
+            box.innerHTML = '';
+            box.appendChild(buildSwatches(newFolderColor, (hex) => {
+                newFolderColor = hex;
+                refreshNewFolderSwatches();   // zaznacz wybraną próbkę
+            }));
+        }
+
+        function closeFolderModal() {
+            const modal = document.getElementById('folder-modal');
+            modal.classList.remove('flex');
+            modal.classList.add('hidden');
+        }
+
+        async function submitFolder() {
+            const name = document.getElementById('folder-name').value.trim();
+            if (!name) { addLog('Podaj nazwę folderu', 'error'); return; }
             const formData = new FormData();
-            formData.append('name', name.trim());
+            formData.append('name', name);
+            formData.append('color', newFolderColor);
             const res = await fetch('/api/folders', { method: 'POST', body: formData });
             if (res.ok) {
                 const data = await res.json();
                 addLog(data.message, 'success');
+                closeFolderModal();
                 loadDevices();
             } else if (!handleDbTooNew(res)) {
                 const err = await res.json().catch(() => ({}));
