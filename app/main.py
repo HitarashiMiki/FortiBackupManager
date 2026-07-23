@@ -44,7 +44,7 @@ from starlette.status import HTTP_302_FOUND, HTTP_401_UNAUTHORIZED
 from .config import load_settings, save_settings, AppSettings, _obf
 from .storage import open_storage, open_db_storage, StorageConfig, StorageError
 from .devicedb import (DeviceDB, Device, WrongPasswordError, DeviceDBError,
-                       DBTooNewError, DB_FILENAME)
+                       DBTooNewError, DB_FILENAME, FOLDER_COLORS)
 from .fortigate import run_backup, device_backup_dir, sanitize_name, BACKUP_DIR
 from .diff import make_diff_html
 from .changes import changed_flags, detect_and_log, find_backup_dir_for_host
@@ -336,7 +336,9 @@ def list_devices(mp: str = Depends(get_master_password)):
     with open_db_storage() as st:
         db = _load_db(st, mp)
         return {"devices": [_device_public(d) for d in db.devices],
-                "folders": db.folders}
+                "folders": db.folders,
+                "folder_colors": db.folder_colors,
+                "palette": list(FOLDER_COLORS)}
 
 
 def _validate_folder(db: DeviceDB, folder: str) -> str:
@@ -514,15 +516,29 @@ def move_device(name: str, folder: str = Form(""),
 # ======================== FOLDERY ========================
 
 @app.post("/api/folders")
-def add_folder(name: str = Form(...), mp: str = Depends(get_master_password)):
-    cfg = get_storage_config()
-    with open_storage(cfg) as st:
+def add_folder(name: str = Form(...), color: str = Form(""),
+               mp: str = Depends(get_master_password)):
+    # baza urządzeń żyje lokalnie w /DB (open_db_storage), nie na magazynie
+    with open_db_storage() as st:
         db = _load_db(st, mp)
         try:
-            db.add_folder(name)
+            db.add_folder(name, color)
         except DeviceDBError as e:
             raise HTTPException(status_code=400, detail=str(e))
         return {"status": "ok", "message": f"Utworzono folder: {name.strip()}"}
+
+
+@app.post("/api/folders/{name}/color")
+def set_folder_color(name: str, color: str = Form(""),
+                     mp: str = Depends(get_master_password)):
+    """Zmiana koloru folderu. Pusty/nieznany kolor = powrót do domyślnego."""
+    with open_db_storage() as st:
+        db = _load_db(st, mp)
+        try:
+            db.set_folder_color(name, color)
+        except DeviceDBError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {"status": "ok"}
 
 
 @app.delete("/api/folders/{name}")
