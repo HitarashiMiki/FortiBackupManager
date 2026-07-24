@@ -99,6 +99,11 @@ class Scheduler:
             if first:
                 self._armed_at = time.time()
             self._reload_due = 0.0  # wymuś świeże wczytanie urządzeń
+        # Wpis tylko przy przejściu uśpiony -> aktywny (pierwsze logowanie
+        # po starcie), żeby kolejni logujący się nie powtarzali komunikatu.
+        # Log poza lockiem — EVENTLOG pisze do pliku.
+        if first:
+            EVENTLOG.log("success", "Harmonogram aktywny.", "scheduler")
 
     def disarm(self) -> None:
         with self._lock:
