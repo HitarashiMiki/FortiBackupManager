@@ -33,6 +33,7 @@ from .devicedb import DeviceDB, Device
 from .fortigate import run_backup, device_backup_dir
 from .changes import detect_and_log
 from .jobs import JOBS
+from .eventlog import EVENTLOG
 
 TICK_SECONDS = 20            # co ile budzi się pętla
 RELOAD_SECONDS = 300         # co ile odświeżana jest baza urządzeń
@@ -163,6 +164,8 @@ class Scheduler:
             with self._lock:
                 self._last_error = f"Odświeżenie bazy: {e}"
                 self._reload_due = time.time() + 60  # spróbuj za minutę
+            EVENTLOG.log("error", f"Harmonogram — odświeżenie bazy urządzeń: {e}",
+                         "scheduler")
             return
 
         now = datetime.now()
@@ -198,10 +201,16 @@ class Scheduler:
                                    lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}"),
                                    device=dev)
                     job.ok_count += 1
+                    EVENTLOG.log("success",
+                                 f"Harmonogram — backup OK: {dev.name} → {path}",
+                                 "scheduler")
             except Exception as e:  # noqa: BLE001
                 JOBS.log(job, f"[{dev.name}] BŁĄD: {e}")
                 job.fail_count += 1
                 ok = False
+                EVENTLOG.log("error",
+                             f"Harmonogram — backup NIEUDANY: {dev.name} — {e}",
+                             "scheduler")
             JOBS.finish(job, ok)
 
         threading.Thread(target=work, daemon=True).start()

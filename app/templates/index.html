@@ -118,11 +118,33 @@
 
             <!-- Change log -->
             <div class="border-t border-[#30363d] bg-[#010409] h-44 flex flex-col flex-shrink-0">
-                <div class="flex justify-between px-4 py-2 border-b border-[#30363d]">
-                    <span class="font-semibold text-sm"><i class="fa-solid fa-terminal mr-2"></i>Dziennik zdarzeń</span>
-                    <button onclick="clearLog()" class="text-xs px-3 py-1 rounded hover:bg-[#21262d]">Wyczyść</button>
+                <div class="flex justify-between items-center px-4 py-1.5 border-b border-[#30363d]">
+                    <!-- Karty: dziennik sesyjny vs globalny (trwały, wszystkie backupy) -->
+                    <div class="flex items-end gap-x-1 -mb-1.5">
+                        <button id="tab-session" onclick="switchLogTab('session')"
+                                class="text-xs px-3 py-1.5 rounded-t-lg border-b-2 border-[#1f6feb] text-white">
+                            <i class="fa-solid fa-terminal mr-1"></i>Sesja
+                        </button>
+                        <button id="tab-global" onclick="switchLogTab('global')"
+                                class="text-xs px-3 py-1.5 rounded-t-lg border-b-2 border-transparent text-[#8b949e] hover:text-white">
+                            <i class="fa-solid fa-clock-rotate-left mr-1"></i>Globalny
+                            <span id="global-error-badge" class="hidden ml-1 px-1.5 rounded-full bg-red-900/60 text-red-300"></span>
+                        </button>
+                    </div>
+                    <div class="flex items-center gap-x-2">
+                        <select id="global-level-filter" onchange="loadGlobalLog()"
+                                class="hidden text-xs bg-[#0d1117] border border-[#30363d] rounded px-2 py-1">
+                            <option value="">Wszystkie</option>
+                            <option value="error">Tylko błędy</option>
+                            <option value="warning">Ostrzeżenia</option>
+                            <option value="success">Sukcesy</option>
+                            <option value="info">Info</option>
+                        </select>
+                        <button onclick="clearActiveLog()" class="text-xs px-3 py-1 rounded hover:bg-[#21262d]">Wyczyść</button>
+                    </div>
                 </div>
                 <div id="log-container" class="flex-1 overflow-auto p-3 text-xs bg-[#0d1117]"></div>
+                <div id="global-log-container" class="hidden flex-1 overflow-auto p-3 text-xs bg-[#0d1117]"></div>
             </div>
         </div>
     </div>
@@ -354,6 +376,101 @@
 
         function clearLog() {
             document.getElementById('log-container').innerHTML = '';
+        }
+
+        // ==================== KARTY DZIENNIKA (sesja / globalny) ====================
+        let activeLogTab = 'session';
+        let globalLogTimer = null;
+
+        function switchLogTab(tab) {
+            activeLogTab = tab;
+            const isGlobal = tab === 'global';
+            document.getElementById('log-container').classList.toggle('hidden', isGlobal);
+            document.getElementById('global-log-container').classList.toggle('hidden', !isGlobal);
+            document.getElementById('global-level-filter').classList.toggle('hidden', !isGlobal);
+            // podświetlenie aktywnej karty
+            const on = 'border-[#1f6feb] text-white', off = 'border-transparent text-[#8b949e]';
+            document.getElementById('tab-session').className =
+                `text-xs px-3 py-1.5 rounded-t-lg border-b-2 ${isGlobal ? off : on}`;
+            document.getElementById('tab-global').className =
+                `text-xs px-3 py-1.5 rounded-t-lg border-b-2 ${isGlobal ? on : off} hover:text-white`;
+            if (isGlobal) {
+                loadGlobalLog();
+                // odświeżaj póki karta globalna jest aktywna
+                if (globalLogTimer) clearInterval(globalLogTimer);
+                globalLogTimer = setInterval(loadGlobalLog, 15000);
+            } else if (globalLogTimer) {
+                clearInterval(globalLogTimer); globalLogTimer = null;
+            }
+        }
+
+        const GLOBAL_LOG_STYLES = {
+            error:   'text-red-400',
+            warning: 'text-[#d29922]',
+            success: 'text-[#3fb950]',
+            info:    'text-[#8b949e]',
+        };
+
+        async function loadGlobalLog() {
+            const level = document.getElementById('global-level-filter').value;
+            const url = '/api/eventlog' + (level ? `?level=${encodeURIComponent(level)}` : '');
+            let data;
+            try {
+                const res = await fetch(url);
+                if (res.status === 401) { window.location = '/login'; return; }
+                if (!res.ok) throw new Error();
+                data = await res.json();
+            } catch (e) {
+                addLog('Nie udało się pobrać globalnego dziennika', 'error');
+                return;
+            }
+            const box = document.getElementById('global-log-container');
+            box.innerHTML = '';
+            const events = data.events || [];
+            if (events.length === 0) {
+                box.innerHTML = `<div class="px-1 py-4 text-[#8b949e]">Brak zdarzeń w globalnym dzienniku.</div>`;
+                return;
+            }
+            events.forEach(ev => {
+                const div = document.createElement('div');
+                div.className = `py-0.5 px-1 text-xs ${GLOBAL_LOG_STYLES[ev.level] || GLOBAL_LOG_STYLES.info}`;
+                // pełny timestamp (data + godzina) — to log historyczny
+                const ts = new Date(ev.ts * 1000).toLocaleString('pl-PL');
+                const stamp = document.createElement('span');
+                stamp.className = 'text-[#6e7681]';
+                stamp.textContent = `[${ts}]${ev.source ? ' ' + ev.source : ''} `;
+                const msg = document.createElement('span');
+                msg.textContent = ev.message;   // textContent — dane z serwera
+                div.append(stamp, msg);
+                box.appendChild(div);
+            });
+        }
+
+        function clearActiveLog() {
+            if (activeLogTab === 'session') { clearLog(); return; }
+            if (!confirm('Wyczyścić GLOBALNY dziennik zdarzeń? Operacja jest trwała.')) return;
+            fetch('/api/eventlog', { method: 'DELETE' }).then(r => {
+                if (r.ok) { loadGlobalLog(); refreshGlobalErrorBadge(); addLog('Globalny dziennik wyczyszczony', 'success'); }
+                else addLog('Nie udało się wyczyścić globalnego dziennika', 'error');
+            });
+        }
+
+        // Licznik błędów przy karcie globalnej — sygnał "coś się nie wykonało"
+        // widoczny nawet gdy patrzysz na kartę sesyjną.
+        async function refreshGlobalErrorBadge() {
+            try {
+                const res = await fetch('/api/eventlog?level=error&limit=100');
+                if (!res.ok) return;
+                const data = await res.json();
+                const n = (data.events || []).length;
+                const badge = document.getElementById('global-error-badge');
+                if (n > 0) {
+                    badge.textContent = n >= 100 ? '99+' : n;
+                    badge.classList.remove('hidden');
+                } else {
+                    badge.classList.add('hidden');
+                }
+            } catch (e) { /* ignoruj */ }
         }
 
         // ==================== DEVICES ====================
@@ -1071,6 +1188,10 @@
             addLog("Aplikacja uruchomiona");
             refreshSchedulerBadge().then(loadDevices);
             setInterval(refreshSchedulerBadge, 60000);
+            // badge z liczbą błędów w globalnym dzienniku — sygnał, że coś
+            // (np. nocny backup) się nie wykonało, widoczny bez wchodzenia w kartę
+            refreshGlobalErrorBadge();
+            setInterval(refreshGlobalErrorBadge, 60000);
         }
     </script>
 </body>
