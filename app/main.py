@@ -97,10 +97,8 @@ def _db_too_new_handler(request: Request, exc: DBTooNewError):
 @app.on_event("startup")
 def _start_scheduler():
     SCHEDULER.start_once()
-    # ślad restartu na osi czasu — po restarcie harmonogram śpi do
-    # pierwszego logowania, więc warto widzieć, kiedy proces wstał
-    EVENTLOG.log("info", "Aplikacja uruchomiona (harmonogram uśpiony do logowania).",
-                 "system")
+    # ślad restartu na osi czasu — widać, kiedy proces wstał
+    EVENTLOG.log("info", "Aplikacja uruchomiona — harmonogram uśpiony.", "system")
 app.add_middleware(
     SessionMiddleware,
     secret_key=get_or_create_secret(),
