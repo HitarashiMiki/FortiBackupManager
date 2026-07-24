@@ -52,6 +52,7 @@ from .audit import run_audit
 from .security import (SESSIONS, LOGIN_LIMITER, get_or_create_secret,
                        safe_backup_path, PathTraversalError)
 from .jobs import JOBS
+from .eventlog import EVENTLOG, LEVELS as EVENTLOG_LEVELS
 from .scheduler import SCHEDULER
 
 app = FastAPI(title="FortiBackup Web", docs_url=None, redoc_url=None)
@@ -96,6 +97,10 @@ def _db_too_new_handler(request: Request, exc: DBTooNewError):
 @app.on_event("startup")
 def _start_scheduler():
     SCHEDULER.start_once()
+    # ślad restartu na osi czasu — po restarcie harmonogram śpi do
+    # pierwszego logowania, więc warto widzieć, kiedy proces wstał
+    EVENTLOG.log("info", "Aplikacja uruchomiona (harmonogram uśpiony do logowania).",
+                 "system")
 app.add_middleware(
     SessionMiddleware,
     secret_key=get_or_create_secret(),
@@ -583,13 +588,16 @@ def _run_backup_job(job, cfg: StorageConfig, mp: str, device_names: Optional[lis
                                    lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}"),
                                    device=dev)
                     job.ok_count += 1
+                    EVENTLOG.log("success", f"Backup OK: {dev.name} → {path}", "backup")
                 except Exception as e:  # noqa: BLE001
                     JOBS.log(job, f"[{dev.name}] BŁĄD: {e}")
                     job.fail_count += 1
                     ok = False
+                    EVENTLOG.log("error", f"Backup NIEUDANY: {dev.name} — {e}", "backup")
     except Exception as e:  # noqa: BLE001
         JOBS.log(job, f"BŁĄD: {e}")
         ok = False
+        EVENTLOG.log("error", f"Backup przerwany: {e}", "backup")
     JOBS.finish(job, ok)
 
 
@@ -718,6 +726,23 @@ def job_status(job_id: str, mp: str = Depends(get_master_password)):
 @app.get("/api/jobs")
 def jobs_recent(mp: str = Depends(get_master_password)):
     return {"jobs": [j.to_dict() for j in JOBS.recent()]}
+
+
+# ======================== GLOBALNY DZIENNIK ========================
+
+@app.get("/api/eventlog")
+def eventlog_recent(level: str = "", limit: int = 200,
+                    mp: str = Depends(get_master_password)):
+    """Globalny event log."""
+    lvl = level if level in EVENTLOG_LEVELS else None
+    return {"events": EVENTLOG.recent(limit=limit, level=lvl)}
+
+
+@app.delete("/api/eventlog")
+def eventlog_clear(mp: str = Depends(get_master_password)):
+    EVENTLOG.clear()
+    EVENTLOG.log("info", "Globalny dziennik wyczyszczony przez użytkownika.", "system")
+    return {"status": "ok"}
 
 
 # ======================== VERSIONS ========================
