@@ -44,7 +44,7 @@ Aplikacja nasłuchuje domyślnie na **http://localhost:8080**
 | Host | Kontener | Zawartość |
 |---|---|---|
 | `./db` | `/DB` | zaszyfrowana baza urządzeń (`devices.db`) |
-| `fortibackup-data` | `/root/.fortibackup-web` | ustawienia połączenia z magazynem, secret sesji |
+| `fortibackup-data` | `/root/.fortibackup-web` | ustawienia połączenia z magazynem |
 
 
 ### Pierwsza konfiguracja
