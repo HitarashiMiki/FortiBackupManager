@@ -30,6 +30,7 @@ import smtplib
 import threading
 import time
 from dataclasses import dataclass, asdict, field
+from datetime import datetime, timedelta
 from email.message import EmailMessage
 from email.utils import formataddr
 from pathlib import Path
@@ -39,10 +40,14 @@ from .config import _obf, _deobf
 from .eventlog import EVENTLOG
 
 EMAIL_FILE = Path.home() / ".fortibackup-web" / "email.json"
+REPORT_STATE_FILE = Path.home() / ".fortibackup-web" / "notify_state.json"
 
 FLUSH_SECONDS = 60          # co ile wątek składa zebrane zdarzenia w jednego maila
 SMTP_TIMEOUT = 20           # sekundy na połączenie/operacje SMTP
 NOTIFY_SOURCE = "notify"    # źródło zdarzeń wysyłki — IGNOROWANE przez queue_event
+REPORT_RETRY_SECONDS = 1800 # po nieudanej wysyłce raportu ponów nie częściej niż co 30 min
+
+_BACKUP_SOURCES = ("backup", "scheduler")
 
 # Progi: które poziomy dziennika wyzwalają maila. Waga zdarzenia >= próg.
 _LEVEL_WEIGHT = {"info": 0, "success": 0, "warning": 1, "error": 2}
@@ -61,6 +66,10 @@ class EmailConfig:
     from_addr: str = ""
     to_addrs: str = ""           # odbiorcy: przecinek / średnik / spacja / nowa linia
     min_level: str = "warning"   # "warning" = warning+error, "error" = tylko error
+    # Zbiorczy raport wykonanych backupów (niezależny od powiadomień o błędach):
+    report: str = "off"          # "off" | "daily" | "weekly"
+    report_time: str = "08:00"   # godzina wysyłki raportu (HH:MM)
+    report_weekday: int = 0      # dla "weekly": 0 = poniedziałek
 
     def recipients(self) -> List[str]:
         raw = self.to_addrs.replace(";", ",").replace("\n", ",").replace(" ", ",")
@@ -73,7 +82,8 @@ class EmailConfig:
         """Do UI — bez hasła (tylko flaga, czy ustawione)."""
         out = {k: getattr(self, k) for k in
                ("enabled", "host", "port", "username", "use_ssl",
-                "use_starttls", "from_addr", "to_addrs", "min_level")}
+                "use_starttls", "from_addr", "to_addrs", "min_level",
+                "report", "report_time", "report_weekday")}
         out["has_password"] = bool(self.password_obf)
         return out
 
@@ -147,6 +157,85 @@ def _format_batch(events: List[dict]) -> tuple:
     return subject, "\n".join(lines)
 
 
+# --------------------------------------------------------------------------- #
+#  Raport zbiorczy backupów (dzienny / tygodniowy)
+# --------------------------------------------------------------------------- #
+
+def _load_report_state() -> dict:
+    try:
+        return json.loads(REPORT_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_report_state(state: dict) -> None:
+    try:
+        REPORT_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        REPORT_STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _parse_hhmm(text: str) -> tuple:
+    try:
+        hh, mm = (int(x) for x in (text or "08:00").split(":")[:2])
+        return hh % 24, mm % 60
+    except (ValueError, AttributeError):
+        return 8, 0
+
+
+def last_scheduled(now: datetime, mode: str, hh: int, mm: int,
+                   weekday: int) -> Optional[datetime]:
+    """Ostatni zaplanowany moment raportu. Odporny na restart."""
+    cand = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    if mode == "daily":
+        if cand > now:
+            cand -= timedelta(days=1)
+        return cand
+    if mode == "weekly":
+        cand -= timedelta(days=(now.weekday() - int(weekday)) % 7)
+        if cand > now:
+            cand -= timedelta(days=7)
+        return cand
+    return None
+
+
+def collect_backup_events(period_seconds: float,
+                          now_ts: Optional[float] = None) -> List[dict]:
+    """Zdarzenia backupu (OK/błąd) z dziennika z ostatniego okresu,
+    chronologicznie."""
+    now_ts = now_ts if now_ts is not None else time.time()
+    cutoff = now_ts - period_seconds
+    events = [e for e in EVENTLOG.recent(limit=10_000)
+              if e.get("source") in _BACKUP_SOURCES and e.get("ts", 0) >= cutoff]
+    events.reverse()   # recent() daje najnowsze pierwsze — raport chce chronologicznie
+    return events
+
+
+def build_report(events: List[dict], label: str) -> tuple:
+    ok = [e for e in events if e["level"] == "success"]
+    fail = [e for e in events if e["level"] == "error"]
+    subject = f"[FortiBackup] Raport {label}: {len(ok)} OK, {len(fail)} nieudanych"
+    lines = [f"Raport {label} wykonanych backupów FortiGate.", ""]
+    lines.append(f"Backupy zakończone sukcesem: {len(ok)}")
+    lines.append(f"Backupy nieudane:           {len(fail)}")
+    lines.append("")
+    if fail:
+        lines.append("── NIEUDANE ─────────────────────────────")
+        for e in fail:
+            ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(e.get("ts", 0)))
+            lines.append(f"  [{ts}] {e['message']}")
+        lines.append("")
+    if ok:
+        lines.append("── UDANE ────────────────────────────────")
+        for e in ok:
+            ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(e.get("ts", 0)))
+            lines.append(f"  [{ts}] {e['message']}")
+    if not events:
+        lines.append("W tym okresie nie wykonano żadnych backupów.")
+    return subject, "\n".join(lines)
+
+
 class Notifier:
     def __init__(self):
         self._lock = threading.Lock()
@@ -184,6 +273,10 @@ class Notifier:
                 self._flush()
             except Exception as e:  # noqa: BLE001 — wątek nie może umrzeć
                 EVENTLOG.log("error", f"Notifier: {e}", NOTIFY_SOURCE)
+            try:
+                self._maybe_send_report()
+            except Exception as e:  # noqa: BLE001
+                EVENTLOG.log("error", f"Notifier (raport): {e}", NOTIFY_SOURCE)
 
     def _flush(self) -> None:
         with self._lock:
@@ -209,6 +302,52 @@ class Notifier:
         send_email(cfg, "[FortiBackup] Wiadomość testowa",
                    "To jest testowe powiadomienie z FortiBackup Web.\n"
                    "Jeśli je widzisz, konfiguracja email działa poprawnie.")
+
+    def _maybe_send_report(self, now: Optional[datetime] = None) -> None:
+        """Raz na okres (daily/weekly) po zaplanowanej godzinie wysyła zbiorczy
+        raport backupów. Nie zależy od logowania — czyta tylko dziennik.
+        Odporny na restart (nadrabia miniony termin) i na dubel (stan na dysku)."""
+        cfg = load_email_config()
+        if not cfg.enabled or cfg.report not in ("daily", "weekly"):
+            return
+        now = now or datetime.now()
+        hh, mm = _parse_hhmm(cfg.report_time)
+        occ = last_scheduled(now, cfg.report, hh, mm, cfg.report_weekday)
+        if occ is None:
+            return
+        occ_ts = occ.timestamp()
+        state = _load_report_state()
+        if state.get("last_report_sent", 0) >= occ_ts:
+            return                                    # raport za ten okres już poszedł
+        # po nieudanej próbie nie młóć co tick — odczekaj REPORT_RETRY_SECONDS
+        if now.timestamp() - state.get("last_report_attempt", 0) < REPORT_RETRY_SECONDS:
+            return
+        period = 7 * 86400 if cfg.report == "weekly" else 86400
+        label = "tygodniowy" if cfg.report == "weekly" else "dzienny"
+        events = collect_backup_events(period, now_ts=now.timestamp())
+        subject, body = build_report(events, label)
+        state["last_report_attempt"] = now.timestamp()
+        _save_report_state(state)
+        try:
+            send_email(cfg, subject, body)
+        except Exception as e:  # noqa: BLE001 — źródło notify => bez pętli
+            EVENTLOG.log("error", f"Wysyłka raportu email nie powiodła się: {e}",
+                         NOTIFY_SOURCE)
+            return
+        state["last_report_sent"] = now.timestamp()
+        _save_report_state(state)
+        EVENTLOG.log("info", f"Wysłano raport {label} ({len(events)} zdarzeń backupu).",
+                     NOTIFY_SOURCE)
+
+    def send_report_now(self, cfg: EmailConfig) -> int:
+        """Natychmiastowy raport."""
+        weekly = cfg.report == "weekly"
+        period = 7 * 86400 if weekly else 86400
+        label = "tygodniowy" if weekly else "dzienny"
+        events = collect_backup_events(period)
+        subject, body = build_report(events, label)
+        send_email(cfg, subject, body)
+        return len(events)
 
 
 NOTIFIER = Notifier()
