@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title>FortiBackup Web • Konfiguracja</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
 <body class="bg-[#0d1117] text-[#c9d1d9]">
     <div class="max-w-2xl mx-auto mt-12 p-8">
@@ -84,6 +85,127 @@
                 Zapisz i przejdź do logowania
             </button>
         </form>
+
+        {% if email and logged %}
+        <!-- POWIADOMIENIA EMAIL (tylko dla zalogowanych) -->
+        <div class="mt-8 bg-[#161b22] border border-[#30363d] rounded-2xl p-8">
+            <h2 class="text-xl font-bold mb-1"><i class="fa-solid fa-envelope mr-2 text-[#1f6feb]"></i>Powiadomienia email</h2>
+            <p class="text-sm text-[#8b949e] mb-6">
+                Wysyłka ostrzeżeń i błędów z globalnego dziennika na wskazany adres. 
+                Zdarzenia są grupowane w wiadomości wysyłanej raz na minutę.
+            </p>
+
+            <div id="email-msg" class="hidden mb-4 p-3 rounded-lg text-sm"></div>
+
+            <form id="email-form" class="space-y-5" onsubmit="return false;">
+                <label class="flex items-center gap-x-3">
+                    <input type="checkbox" id="em-enabled" {% if email.enabled %}checked{% endif %}
+                           class="w-4 h-4 accent-[#1f6feb]">
+                    <span class="text-sm font-medium">Włącz powiadomienia email</span>
+                </label>
+
+                <div class="grid grid-cols-3 gap-4">
+                    <div class="col-span-2">
+                        <label class="block text-sm mb-1">Serwer SMTP</label>
+                        <input type="text" id="em-host" value="{{ email.host }}" placeholder="smtp.example.com"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-sm mb-1">Port</label>
+                        <input type="number" id="em-port" value="{{ email.port or 587 }}"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm mb-1">Użytkownik SMTP</label>
+                        <input type="text" id="em-username" value="{{ email.username }}"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-sm mb-1">Hasło SMTP</label>
+                        <input type="password" id="em-password"
+                               placeholder="{% if email.has_password %}pozostaw puste, aby nie zmieniać{% else %}hasło{% endif %}"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                    </div>
+                </div>
+
+                <div class="flex gap-x-6">
+                    <label class="flex items-center gap-x-2 text-sm">
+                        <input type="checkbox" id="em-starttls" {% if email.use_starttls %}checked{% endif %}
+                               class="w-4 h-4 accent-[#1f6feb]"> STARTTLS (port 587)
+                    </label>
+                    <label class="flex items-center gap-x-2 text-sm">
+                        <input type="checkbox" id="em-ssl" {% if email.use_ssl %}checked{% endif %}
+                               class="w-4 h-4 accent-[#1f6feb]"> SSL/TLS (port 465)
+                    </label>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm mb-1">Adres nadawcy (From)</label>
+                        <input type="text" id="em-from" value="{{ email.from_addr }}" placeholder="fortibackup@example.com"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-sm mb-1">Wysyłaj od poziomu</label>
+                        <select id="em-level" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                            <option value="warning" {% if email.min_level == 'warning' %}selected{% endif %}>Ostrzeżenia i błędy</option>
+                            <option value="error" {% if email.min_level == 'error' %}selected{% endif %}>Tylko błędy</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm mb-1">Odbiorcy</label>
+                    <input type="text" id="em-to" value="{{ email.to_addrs }}" placeholder="admin@example.com, drugi@example.com"
+                           class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                    <p class="text-xs text-[#8b949e] mt-1">Wiele adresów rozdziel przecinkiem.</p>
+                </div>
+
+                <div class="flex gap-3 pt-2">
+                    <button type="button" onclick="saveEmail()"
+                            class="px-6 py-2.5 bg-[#1f6feb] hover:bg-[#388bfd] rounded-lg font-semibold">Zapisz</button>
+                    <button type="button" onclick="testEmail()"
+                            class="px-6 py-2.5 border border-[#30363d] hover:bg-[#21262d] rounded-lg">Wyślij testowy</button>
+                </div>
+            </form>
+        </div>
+
+        <script>
+            function emailFormData() {
+                const fd = new FormData();
+                fd.append('enabled', document.getElementById('em-enabled').checked);
+                fd.append('host', document.getElementById('em-host').value);
+                fd.append('port', document.getElementById('em-port').value);
+                fd.append('username', document.getElementById('em-username').value);
+                fd.append('password', document.getElementById('em-password').value);
+                fd.append('use_ssl', document.getElementById('em-ssl').checked);
+                fd.append('use_starttls', document.getElementById('em-starttls').checked);
+                fd.append('from_addr', document.getElementById('em-from').value);
+                fd.append('to_addrs', document.getElementById('em-to').value);
+                fd.append('min_level', document.getElementById('em-level').value);
+                return fd;
+            }
+            function showEmailMsg(text, ok) {
+                const box = document.getElementById('email-msg');
+                box.textContent = text;
+                box.className = 'mb-4 p-3 rounded-lg text-sm ' + (ok
+                    ? 'bg-[#12361f] border border-[#238636] text-[#3fb950]'
+                    : 'bg-red-900/30 border border-red-700 text-red-400');
+                box.classList.remove('hidden');
+            }
+            async function postEmail(url) {
+                const res = await fetch(url, { method: 'POST', body: emailFormData() });
+                const data = await res.json().catch(() => ({}));
+                if (res.ok) showEmailMsg(data.message || 'OK', true);
+                else showEmailMsg(data.detail || 'Wystąpił błąd', false);
+            }
+            function saveEmail() { postEmail('/api/email'); }
+            function testEmail() { showEmailMsg('Wysyłam wiadomość testową…', true); postEmail('/api/email/test'); }
+        </script>
+        {% endif %}
 
         {% if configured %}
         <!-- STREFA NIEBEZPIECZNA -->

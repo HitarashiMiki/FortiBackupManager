@@ -55,6 +55,8 @@ from .security import (SESSIONS, LOGIN_LIMITER, get_or_create_secret,
                        safe_backup_path, PathTraversalError)
 from .jobs import JOBS
 from .eventlog import EVENTLOG, LEVELS as EVENTLOG_LEVELS
+from .notifier import (NOTIFIER, load_email_config, save_email_config,
+                       EmailConfig)
 from .scheduler import SCHEDULER
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -72,6 +74,8 @@ HTTPS_ONLY = _env_bool("FORTIBACKUP_HTTPS_ONLY", False)
 
 def _startup_tasks() -> None:
     SCHEDULER.start_once()
+    NOTIFIER.start_once()
+    EVENTLOG.subscribe(NOTIFIER.queue_event)
     # ślad restartu na osi czasu — widać, kiedy proces wstał
     EVENTLOG.log("info", "Aplikacja uruchomiona — harmonogram uśpiony.", "system")
 
@@ -99,6 +103,7 @@ async def _form_validation_handler(request: Request, exc: RequestValidationError
             request=request, name="setup.html",
             context={"settings": settings, "configured": bool(settings.host),
                      "logged": logged,
+                     "email": load_email_config().to_public(),
                      "error": "Uzupełnij wymagane pola formularza."},
             status_code=400)
     if path == "/login":
@@ -303,6 +308,7 @@ def setup_page(request: Request):
         context={"settings": settings,
                  "configured": bool(settings.host),
                  "logged": logged,
+                 "email": load_email_config().to_public(),
                  "error": None})
 
 
@@ -353,6 +359,7 @@ def save_setup(
             request=request, name="setup.html",
             context={"settings": settings, "configured": bool(old.host),
                      "logged": logged,
+                     "email": load_email_config().to_public(),
                      "error": f"Połączenie z magazynem nie powiodło się — nic nie zapisano. {e}"})
     save_settings(settings)
     SCHEDULER.refresh()
@@ -373,6 +380,75 @@ def reset_setup(request: Request, confirm_password: str = Form("")):
     SCHEDULER.disarm()
     request.session.clear()
     return RedirectResponse("/setup", status_code=HTTP_302_FOUND)
+
+
+# ======================== POWIADOMIENIA EMAIL ========================
+
+def _email_from_form(enabled, host, port, username, password, use_ssl,
+                     use_starttls, from_addr, to_addrs, min_level) -> EmailConfig:
+    old = load_email_config()
+    return EmailConfig(
+        enabled=enabled, host=host.strip(), port=port,
+        username=username.strip(),
+        # puste pole hasła = zachowaj dotychczasowe (jak przy magazynie/urządzeniach)
+        password_obf=_obf(password) if password else old.password_obf,
+        use_ssl=use_ssl, use_starttls=use_starttls,
+        from_addr=from_addr.strip(), to_addrs=to_addrs.strip(),
+        min_level=min_level if min_level in ("warning", "error") else "warning",
+    )
+
+
+@app.get("/api/email")
+def get_email_config(mp: str = Depends(get_master_password)):
+    return load_email_config().to_public()
+
+
+@app.post("/api/email")
+def save_email(
+    enabled: bool = Form(False),
+    host: str = Form(""),
+    port: int = Form(587),
+    username: str = Form(""),
+    password: str = Form(""),
+    use_ssl: bool = Form(False),
+    use_starttls: bool = Form(True),
+    from_addr: str = Form(""),
+    to_addrs: str = Form(""),
+    min_level: str = Form("warning"),
+    mp: str = Depends(get_master_password),
+):
+    cfg = _email_from_form(enabled, host, port, username, password, use_ssl,
+                           use_starttls, from_addr, to_addrs, min_level)
+    if cfg.enabled and not cfg.recipients():
+        raise HTTPException(status_code=400,
+                            detail="Włączono powiadomienia, ale nie podano żadnego adresu odbiorcy.")
+    save_email_config(cfg)
+    return {"status": "ok", "message": "Zapisano konfigurację powiadomień email."}
+
+
+@app.post("/api/email/test")
+def test_email(
+    enabled: bool = Form(False),
+    host: str = Form(""),
+    port: int = Form(587),
+    username: str = Form(""),
+    password: str = Form(""),
+    use_ssl: bool = Form(False),
+    use_starttls: bool = Form(True),
+    from_addr: str = Form(""),
+    to_addrs: str = Form(""),
+    min_level: str = Form("warning"),
+    mp: str = Depends(get_master_password),
+):
+    """Wysyła testowy mail z DANYCH Z FORMULARZA, żeby dało
+    się sprawdzić ustawienia przed zapisaniem. Puste hasło = użyj zapisanego."""
+    cfg = _email_from_form(enabled, host, port, username, password, use_ssl,
+                           use_starttls, from_addr, to_addrs, min_level)
+    try:
+        NOTIFIER.send_test(cfg)
+    except Exception as e:  # noqa: BLE001 — pokaż użytkownikowi przyczynę
+        raise HTTPException(status_code=400, detail=f"Wysyłka testowa nie powiodła się: {e}")
+    return {"status": "ok", "message": f"Wysłano wiadomość testową do: {', '.join(cfg.recipients())}"}
 
 
 # ======================== MAIN PAGE ========================
