@@ -25,23 +25,52 @@
                 </div>
                 {% endif %}
 
+                {% if first_run %}
+                {# Bazy urządzeń jeszcze nie ma: podane hasło dopiero ją TWORZY.
+                   Wcześniej ekran zachęcał do odblokowania, choć nie było
+                   czego odblokowywać. #}
+                <div class="mb-5 p-3 bg-[#1f6feb]/10 border border-[#1f6feb]/50 rounded-lg text-sm">
+                    <p class="font-semibold mb-1"><i class="fa-solid fa-key mr-2"></i>Pierwsze uruchomienie</p>
+                    <p class="text-[#8b949e]">
+                        Ustaw hasło główne — zaszyfruje ono bazę urządzeń wraz z danymi
+                        dostępowymi do FortiGate'ów. <span class="text-[#d29922]">Nie da się go
+                        odzyskać ani zresetować</span>, więc zapisz je w bezpiecznym miejscu.
+                    </p>
+                </div>
+                {% endif %}
+
                 <form method="post" action="/login">
                     <div class="mb-6">
-                        <label class="block text-sm font-medium mb-2 text-[#8b949e]">Hasło</label>
+                        <label class="block text-sm font-medium mb-2 text-[#8b949e]">
+                            {% if first_run %}Nowe hasło główne{% else %}Hasło{% endif %}
+                        </label>
                         <input type="password" name="master_password" required
+                               {% if first_run %}minlength="8" autocomplete="new-password"{% endif %}
                                class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-3 focus:outline-none focus:border-[#1f6feb]">
                     </div>
 
+                    {% if first_run %}
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium mb-2 text-[#8b949e]">Powtórz hasło</label>
+                        <input type="password" name="confirm_master_password" required
+                               minlength="8" autocomplete="new-password"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-3 focus:outline-none focus:border-[#1f6feb]">
+                        <p class="text-xs text-[#8b949e] mt-2">Minimum 8 znaków.</p>
+                    </div>
+                    {% endif %}
+
                     <button type="submit"
                             class="w-full bg-[#1f6feb] hover:bg-[#388bfd] transition-colors text-white font-semibold py-3 rounded-lg">
-                        Odblokuj aplikację
+                        {% if first_run %}Ustaw hasło i utwórz bazę{% else %}Odblokuj aplikację{% endif %}
                     </button>
                 </form>
             </div>
 
+            {% if not first_run %}
             <p class="text-center text-xs text-[#8b949e] mt-6">
                 Hasło
             </p>
+            {% endif %}
             <p class="text-center text-xs mt-2">
                 <a href="/setup" class="text-[#8b949e] hover:text-[#c9d1d9] underline">
                     Baza została przeniesiona? Zmień konfigurację magazynu

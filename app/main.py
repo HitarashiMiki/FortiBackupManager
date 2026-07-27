@@ -76,7 +76,8 @@ async def _form_validation_handler(request: Request, exc: RequestValidationError
     if path == "/login":
         return templates.TemplateResponse(
             request=request, name="login.html",
-            context={"error": "Podaj hasło główne."}, status_code=400)
+            context={"error": "Podaj hasło główne.", "first_run": _is_first_run()},
+            status_code=400)
     return await request_validation_exception_handler(request, exc)
 
 
@@ -144,6 +145,17 @@ def _load_db(st, mp: str) -> DeviceDB:
     return db
 
 
+def _is_first_run() -> bool:
+    """Czy baza urządzeń jeszcze nie istnieje? Wtedy hasło podane przy
+    logowaniu dopiero JĄ TWORZY — ekran logowania musi to jasno mówić
+    (inaczej 'Odblokuj aplikację' myli: nie ma czego odblokowywać)."""
+    try:
+        with open_db_storage() as dbst:
+            return not dbst.exists(dbst.join(DB_FILENAME))
+    except Exception:  # noqa: BLE001 — przy wątpliwości zachowaj się jak zwykłe logowanie
+        return False
+
+
 def _migrate_db_from_remote(settings: AppSettings, dbst, local_path: str) -> None:
     """Jednorazowa migracja: baza urządzeń była kiedyś dostępna na sftp"""
     try:
@@ -165,20 +177,40 @@ def login_page(request: Request):
     if not settings.host:
         return RedirectResponse("/setup", status_code=HTTP_302_FOUND)
     return templates.TemplateResponse(request=request, name="login.html",
-                                      context={"error": None})
+                                      context={"error": None,
+                                               "first_run": _is_first_run()})
 
 
 @app.post("/login")
-def login(request: Request, master_password: str = Form(...)):
+def login(request: Request, master_password: str = Form(...),
+          confirm_master_password: str = Form("")):
     settings = load_settings()
     if not settings.host:
         return RedirectResponse("/setup", status_code=HTTP_302_FOUND)
+
+    first_run = _is_first_run()
 
     client_ip = request.client.host if request.client else "?"
     if not LOGIN_LIMITER.allow(client_ip):
         return templates.TemplateResponse(
             request=request, name="login.html",
-            context={"error": "Zbyt dużo prób logowania z tego adresu — odczekaj minutę."})
+            context={"error": "Zbyt dużo prób logowania z tego adresu — odczekaj minutę.",
+                     "first_run": first_run})
+
+    if first_run:
+        # Pierwsze logowanie TWORZY zaszyfrowaną bazę — dowolne hasło zostanie
+        # przyjęte, więc literówka dałaby bazę z hasłem, którego nikt nie zna
+        # (nie da się go odzyskać). Stąd wymagane potwierdzenie.
+        if len(master_password) < 8:
+            return templates.TemplateResponse(
+                request=request, name="login.html",
+                context={"error": "Hasło główne musi mieć co najmniej 8 znaków.",
+                         "first_run": True})
+        if confirm_master_password != master_password:
+            return templates.TemplateResponse(
+                request=request, name="login.html",
+                context={"error": "Hasła nie są identyczne — spróbuj ponownie.",
+                         "first_run": True})
 
     try:
         with open_db_storage() as dbst:
@@ -189,21 +221,21 @@ def login(request: Request, master_password: str = Form(...)):
     except WrongPasswordError:
         return templates.TemplateResponse(
             request=request, name="login.html",
-            context={"error": "Błędne hasło bazy danych"})
+            context={"error": "Błędne hasło bazy danych", "first_run": False})
     except DBTooNewError as e:
         # Drugie (obok API/426) miejsce powiadomienia: już przy logowaniu,
         # zanim ktokolwiek zdąży cokolwiek zapisać do bazy.
         return templates.TemplateResponse(
             request=request, name="login.html",
-            context={"error": str(e)})
+            context={"error": str(e), "first_run": False})
     except DeviceDBError as e:
         return templates.TemplateResponse(
             request=request, name="login.html",
-            context={"error": str(e)})
-    except Exception as e: 
+            context={"error": str(e), "first_run": first_run})
+    except Exception as e:
         return templates.TemplateResponse(
             request=request, name="login.html",
-            context={"error": f"Błąd połączenia: {e}"})
+            context={"error": f"Błąd połączenia: {e}", "first_run": first_run})
 
     # W cookie ląduje wyłącznie losowy token; hasło zostaje w RAM serwera.
     request.session["token"] = SESSIONS.create(master_password)
