@@ -25,7 +25,7 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Deque, List, Optional
+from typing import Callable, Deque, List, Optional
 
 MAX_EVENTS = 2000            # ile ostatnich wpisów trzymamy (RAM + plik)
 COMPACT_EVERY = 100         # co ile zapisów przepisujemy plik (rotacja)
@@ -42,6 +42,12 @@ class EventLog:
         self._buf: Deque[dict] = deque(maxlen=MAX_EVENTS)
         self._loaded = False
         self._writes = 0
+        self._subscribers: List[Callable[[dict], None]] = []
+
+    def subscribe(self, callback: Callable[[dict], None]) -> None:
+        with self._lock:
+            if callback not in self._subscribers:   # idempotentne (restart lifespan)
+                self._subscribers.append(callback)
 
     @property
     def _path(self) -> Path:
@@ -103,6 +109,12 @@ class EventLog:
                 self._rewrite_file()
             else:
                 self._append_file(entry)
+            subscribers = list(self._subscribers)
+        for cb in subscribers:
+            try:
+                cb(dict(entry))
+            except Exception:  # noqa: BLE001
+                pass
 
     def recent(self, limit: int = 200, level: Optional[str] = None) -> List[dict]:
         with self._lock:
