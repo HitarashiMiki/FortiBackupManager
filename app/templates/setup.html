@@ -164,11 +164,49 @@
                     <p class="text-xs text-[#8b949e] mt-1">Wiele adresów rozdziel przecinkiem.</p>
                 </div>
 
-                <div class="flex gap-3 pt-2">
+                <!-- RAPORT ZBIORCZY WYKONANYCH BACKUPÓW -->
+                <div class="border-t border-[#30363d] pt-5">
+                    <h3 class="text-sm font-semibold mb-1"><i class="fa-solid fa-calendar-check mr-2 text-[#3fb950]"></i>Raport wykonanych backupów</h3>
+                    <p class="text-xs text-[#8b949e] mb-3">
+                        Zbiorcze podsumowanie (ile OK, ile nieudanych) wysyłane cyklicznie.
+                        Działa niezależnie od powiadomień o błędach — i nawet gdy nikt nie jest zalogowany.
+                    </p>
+                    <div class="grid grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-sm mb-1">Częstotliwość</label>
+                            <select id="em-report" onchange="toggleReportFields()" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                                <option value="off" {% if email.report == 'off' %}selected{% endif %}>Wyłączony</option>
+                                <option value="daily" {% if email.report == 'daily' %}selected{% endif %}>Codziennie</option>
+                                <option value="weekly" {% if email.report == 'weekly' %}selected{% endif %}>Co tydzień</option>
+                            </select>
+                        </div>
+                        <div id="em-report-time-box">
+                            <label class="block text-sm mb-1">Godzina</label>
+                            <input type="time" id="em-report-time" value="{{ email.report_time or '08:00' }}"
+                                   class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                        </div>
+                        <div id="em-report-weekday-box">
+                            <label class="block text-sm mb-1">Dzień tygodnia</label>
+                            <select id="em-report-weekday" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                                <option value="0" {% if email.report_weekday == 0 %}selected{% endif %}>Poniedziałek</option>
+                                <option value="1" {% if email.report_weekday == 1 %}selected{% endif %}>Wtorek</option>
+                                <option value="2" {% if email.report_weekday == 2 %}selected{% endif %}>Środa</option>
+                                <option value="3" {% if email.report_weekday == 3 %}selected{% endif %}>Czwartek</option>
+                                <option value="4" {% if email.report_weekday == 4 %}selected{% endif %}>Piątek</option>
+                                <option value="5" {% if email.report_weekday == 5 %}selected{% endif %}>Sobota</option>
+                                <option value="6" {% if email.report_weekday == 6 %}selected{% endif %}>Niedziela</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap gap-3 pt-2">
                     <button type="button" onclick="saveEmail()"
                             class="px-6 py-2.5 bg-[#1f6feb] hover:bg-[#388bfd] rounded-lg font-semibold">Zapisz</button>
                     <button type="button" onclick="testEmail()"
                             class="px-6 py-2.5 border border-[#30363d] hover:bg-[#21262d] rounded-lg">Wyślij testowy</button>
+                    <button type="button" onclick="reportNow()"
+                            class="px-6 py-2.5 border border-[#30363d] hover:bg-[#21262d] rounded-lg">Wyślij raport teraz</button>
                 </div>
             </form>
         </div>
@@ -186,7 +224,15 @@
                 fd.append('from_addr', document.getElementById('em-from').value);
                 fd.append('to_addrs', document.getElementById('em-to').value);
                 fd.append('min_level', document.getElementById('em-level').value);
+                fd.append('report', document.getElementById('em-report').value);
+                fd.append('report_time', document.getElementById('em-report-time').value);
+                fd.append('report_weekday', document.getElementById('em-report-weekday').value);
                 return fd;
+            }
+            function toggleReportFields() {
+                const mode = document.getElementById('em-report').value;
+                document.getElementById('em-report-time-box').classList.toggle('hidden', mode === 'off');
+                document.getElementById('em-report-weekday-box').classList.toggle('hidden', mode !== 'weekly');
             }
             function showEmailMsg(text, ok) {
                 const box = document.getElementById('email-msg');
@@ -204,6 +250,8 @@
             }
             function saveEmail() { postEmail('/api/email'); }
             function testEmail() { showEmailMsg('Wysyłam wiadomość testową…', true); postEmail('/api/email/test'); }
+            function reportNow() { showEmailMsg('Wysyłam raport…', true); postEmail('/api/email/report-now'); }
+            toggleReportFields();
         </script>
         {% endif %}
 
