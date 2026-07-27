@@ -13,6 +13,8 @@ services:
       - ./db:/DB
     environment:
       - TZ=Europe/Warsaw
+      # Ustaw na true, gdy aplikacja stoi za reverse proxy z TLS (Caddy/nginx)
+      - FORTIBACKUP_HTTPS_ONLY=false
     restart: unless-stopped
 
 volumes:

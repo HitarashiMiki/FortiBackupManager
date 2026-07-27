@@ -37,6 +37,9 @@ from .eventlog import EVENTLOG
 
 TICK_SECONDS = 20            # co ile budzi się pętla
 RELOAD_SECONDS = 300         # co ile odświeżana jest baza urządzeń
+# Po tylu sekundach od restartu BEZ jakiegokolwiek logowania wrzucamy czerwone
+# przypomnienie do dziennika: harmonogram śpi. Domyślnie 1 doba.
+IDLE_WARN_SECONDS = 24 * 3600
 
 
 def compute_next_run(dev: Device, now: datetime) -> Optional[datetime]:
@@ -80,6 +83,8 @@ class Scheduler:
         self._sigs: Dict[str, Tuple] = {}
         self._reload_due = 0.0
         self._last_error: Optional[str] = None
+        self._started_at: Optional[float] = None   # start procesu (do idle-warn)
+        self._idle_warned = False                   # czy ostrzeżono o braku logowania
 
     # -- sterowanie -----------------------------------------------------------
 
@@ -87,6 +92,8 @@ class Scheduler:
         with self._lock:
             if self._thread and self._thread.is_alive():
                 return
+            self._started_at = time.time()
+            self._idle_warned = False
             self._thread = threading.Thread(target=self._loop, daemon=True,
                                             name="fortibackup-scheduler")
             self._thread.start()
@@ -98,6 +105,7 @@ class Scheduler:
             self._mp = master_password
             if first:
                 self._armed_at = time.time()
+            self._idle_warned = False   # ktoś się zalogował — licznik nieaktualny
             self._reload_due = 0.0  # wymuś świeże wczytanie urządzeń
         # Wpis tylko przy przejściu uśpiony -> aktywny (pierwsze logowanie
         # po starcie), żeby kolejni logujący się nie powtarzali komunikatu.
@@ -109,6 +117,9 @@ class Scheduler:
         with self._lock:
             self._mp = None
             self._armed_at = None
+            # licznik idle liczymy od teraz (disarm to celowa akcja, nie restart)
+            self._started_at = time.time()
+            self._idle_warned = False
             self._next.clear()
             self._sigs.clear()
 
@@ -143,6 +154,7 @@ class Scheduler:
             mp = self._mp
             reload_needed = time.time() >= self._reload_due
         if not mp:
+            self._maybe_warn_idle()
             return
 
         if reload_needed:
@@ -158,6 +170,25 @@ class Scheduler:
                     self._next[dev.name] = compute_next_run(dev, now)
         for dev in due:
             self._run_scheduled(dev, mp)
+
+    def _maybe_warn_idle(self) -> None:
+        """Nikt nie zalogował się od restartu — po IDLE_WARN_SECONDS wrzuć
+        JEDNORAZOWE czerwone przypomnienie, że harmonogram śpi i backupy
+        automatyczne nie działają. Pierwsza osoba, która się zaloguje,
+        zobaczy to w globalnym dzienniku."""
+        with self._lock:
+            # uzbrojony (ktoś zalogowany) => harmonogram działa, nie ostrzegaj
+            if self._mp is not None or self._idle_warned or self._started_at is None:
+                return
+            if time.time() - self._started_at < IDLE_WARN_SECONDS:
+                return
+            self._idle_warned = True
+        EVENTLOG.log(
+            "error",
+            "Od restartu nikt się nie zalogował przez ponad dobę — harmonogram "
+            "jest uśpiony, a automatyczne backupy NIE są wykonywane. "
+            "Zaloguj się, aby go uruchomić.",
+            "scheduler")
 
     def _reload_devices(self, mp: str) -> None:
         try:

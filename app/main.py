@@ -26,10 +26,12 @@ Najważniejsze decyzje (względem pierwszej wersji webowej):
 
 from __future__ import annotations
 
+import os
 import platform
 import posixpath
 import subprocess
 import threading
+from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, Request, Form, HTTPException, Depends
@@ -55,7 +57,33 @@ from .jobs import JOBS
 from .eventlog import EVENTLOG, LEVELS as EVENTLOG_LEVELS
 from .scheduler import SCHEDULER
 
-app = FastAPI(title="FortiBackup Web", docs_url=None, redoc_url=None)
+def _env_bool(name: str, default: bool = False) -> bool:
+    """Odczyt flagi bool ze zmiennej środowiskowej (np. przy `docker run -e`)."""
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
+# Cookie sesji tylko po HTTPS, gdy aplikacja stoi za reverse proxy
+# z TLS (Caddy/nginx).
+HTTPS_ONLY = _env_bool("FORTIBACKUP_HTTPS_ONLY", False)
+
+
+def _startup_tasks() -> None:
+    SCHEDULER.start_once()
+    # ślad restartu na osi czasu — widać, kiedy proces wstał
+    EVENTLOG.log("info", "Aplikacja uruchomiona — harmonogram uśpiony.", "system")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _startup_tasks()
+    yield
+
+
+app = FastAPI(title="FortiBackup Web", docs_url=None, redoc_url=None,
+              lifespan=lifespan)
 
 
 @app.exception_handler(RequestValidationError)
@@ -95,17 +123,12 @@ def _db_too_new_handler(request: Request, exc: DBTooNewError):
     return JSONResponse(status_code=426, content={"detail": str(exc)})
 
 
-@app.on_event("startup")
-def _start_scheduler():
-    SCHEDULER.start_once()
-    # ślad restartu na osi czasu — widać, kiedy proces wstał
-    EVENTLOG.log("info", "Aplikacja uruchomiona — harmonogram uśpiony.", "system")
 app.add_middleware(
     SessionMiddleware,
     secret_key=get_or_create_secret(),
-    max_age=8 * 3600,          
+    max_age=8 * 3600,
     same_site="lax",
-    https_only=False,          # ustaw True, gdy stoi za TLS-em (reverse proxy)
+    https_only=HTTPS_ONLY,     # FORTIBACKUP_HTTPS_ONLY=true za TLS-em (reverse proxy)
 )
 
 templates = Jinja2Templates(directory="app/templates")
