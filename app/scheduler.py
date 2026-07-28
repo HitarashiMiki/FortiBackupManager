@@ -32,6 +32,7 @@ from .storage import open_storage, open_db_storage
 from .devicedb import DeviceDB, Device
 from .fortigate import run_backup, device_backup_dir
 from .changes import detect_and_log
+from .retention import apply_retention
 from .jobs import JOBS
 from .eventlog import EVENTLOG
 
@@ -40,6 +41,10 @@ RELOAD_SECONDS = 300         # co ile odświeżana jest baza urządzeń
 # Po tylu sekundach od restartu BEZ jakiegokolwiek logowania wrzucamy czerwone
 # przypomnienie do dziennika: harmonogram śpi. Domyślnie 1 doba.
 IDLE_WARN_SECONDS = 24 * 3600
+# Cykliczny przegląd retencji całej floty — siatka bezpieczeństwa dla trybu
+# "days" i urządzeń, które chwilowo nie backupują (retencja leci też po każdym
+# backupie, ale to nie przycina kopii, gdy backupów brak). Domyślnie raz/dobę.
+RETENTION_SWEEP_SECONDS = 24 * 3600
 
 
 def compute_next_run(dev: Device, now: datetime) -> Optional[datetime]:
@@ -85,6 +90,7 @@ class Scheduler:
         self._last_error: Optional[str] = None
         self._started_at: Optional[float] = None   # start procesu (do idle-warn)
         self._idle_warned = False                   # czy ostrzeżono o braku logowania
+        self._retention_due = 0.0                   # kiedy następny przegląd retencji
 
     # -- sterowanie -----------------------------------------------------------
 
@@ -171,6 +177,51 @@ class Scheduler:
         for dev in due:
             self._run_scheduled(dev, mp)
 
+        self._maybe_sweep_retention(mp)
+
+    def _maybe_sweep_retention(self, mp: str) -> None:
+        """Raz na RETENTION_SWEEP_SECONDS przejrzyj retencję CAŁEJ floty.
+        Pierwszy przegląd tuż po uzbrojeniu (_retention_due startuje z 0)."""
+        with self._lock:
+            if time.time() < self._retention_due:
+                return
+            self._retention_due = time.time() + RETENTION_SWEEP_SECONDS
+            devices = [d for d in self._devices
+                       if d.retention_mode in ("count", "days", "gfs")]
+        if not devices:
+            return
+        self._run_retention_sweep(devices)
+
+    def _run_retention_sweep(self, devices: List[Device]) -> None:
+        job = JOBS.create("Retencja: przegląd urządzeń")
+        JOBS.log(job, f"Przegląd retencji dla {len(devices)} urządzeń")
+
+        def work():
+            total = 0
+            ok = True
+            try:
+                cfg = load_settings().to_storage_config()
+                with open_storage(cfg) as st:
+                    for dev in devices:
+                        try:
+                            total += apply_retention(
+                                dev, st,
+                                logger=lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}"))
+                        except Exception as e:  # noqa: BLE001 — jedno urządzenie nie psuje reszty
+                            JOBS.log(job, f"[{dev.name}] retencja: {e}")
+                            ok = False
+                JOBS.log(job, f"Przegląd zakończony. Usunięto łącznie {total} kopii.")
+                if total:
+                    EVENTLOG.log("info",
+                                 f"Retencja — przegląd urządzeń: usunięto {total} kopii.",
+                                 "scheduler")
+            except Exception as e:  # noqa: BLE001
+                JOBS.log(job, f"BŁĄD: {e}")
+                ok = False
+            JOBS.finish(job, ok)
+
+        threading.Thread(target=work, daemon=True).start()
+
     def _maybe_warn_idle(self) -> None:
         """Nikt nie zalogował się od restartu — po IDLE_WARN_SECONDS wrzuć
         JEDNORAZOWE czerwone przypomnienie, że harmonogram śpi i backupy
@@ -240,6 +291,10 @@ class Scheduler:
                     EVENTLOG.log("success",
                                  f"Harmonogram — backup OK: {dev.name} → {path}",
                                  "scheduler")
+                    try:
+                        apply_retention(dev, st, logger=lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}"))
+                    except Exception as e:  # noqa: BLE001 — nie psuj udanego backupu
+                        JOBS.log(job, f"[{dev.name}] Retencja pominięta: {e}")
             except Exception as e:  # noqa: BLE001
                 JOBS.log(job, f"[{dev.name}] BŁĄD: {e}")
                 job.fail_count += 1

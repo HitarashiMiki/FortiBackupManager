@@ -82,6 +82,14 @@ class Device:
     # o INNEJ nazwie: odtwarzanie bazy urządzeń (dopasowanie po hoście
     # z .fbk-meta.json) albo zmiana nazwy urządzenia (ciągłość historii).
     backup_dir: str = ""
+    # Retencja starych kopii (per urządzenie). Automatyczne usuwanie nadmiaru
+    # po każdym udanym backupie — patrz retention.py.
+    retention_mode: str = "off"      # "off" | "count" | "days" | "gfs"
+    retention_count: int = 30        # dla "count": ile ostatnich kopii trzymać
+    retention_days: int = 90         # dla "days": usuń starsze niż N dni
+    gfs_daily: int = 7               # GFS: ile ostatnich dni (1 kopia/dzień)
+    gfs_weekly: int = 4              # GFS: ile ostatnich tygodni (1 kopia/tydz.)
+    gfs_monthly: int = 12            # GFS: ile ostatnich miesięcy (1 kopia/mies.)
     # Pola nieznane tej wersji programu (dopisane przez nowszą, kompatybilną
     # wersję) — przechowywane i oddawane przy zapisie, żeby edycja starszą
     # wersją nie wycinała cudzych danych.
