@@ -64,16 +64,22 @@ class EmailConfig:
     use_ssl: bool = False        # SMTPS — połączenie od razu szyfrowane (zwykle :465)
     use_starttls: bool = True    # STARTTLS — upgrade po połączeniu (zwykle :587)
     from_addr: str = ""
-    to_addrs: str = ""           # odbiorcy: przecinek / średnik / spacja / nowa linia
+    # Powiadomienia o błędach (warning/error z dziennika):
+    to_addrs: str = ""           # odbiorcy powiadomień: przecinek/średnik/spacja/nl
     min_level: str = "warning"   # "warning" = warning+error, "error" = tylko error
-    # Zbiorczy raport wykonanych backupów (niezależny od powiadomień o błędach):
+    # Zbiorczy raport wykonanych backupów (niezależny od powiadomień):
     report: str = "off"          # "off" | "daily" | "weekly"
     report_time: str = "08:00"   # godzina wysyłki raportu (HH:MM)
     report_weekday: int = 0      # dla "weekly": 0 = poniedziałek
+    report_to_addrs: str = ""    # odbiorcy raportu — NIEZALEŻNI od powiadomień
 
     def recipients(self) -> List[str]:
-        raw = self.to_addrs.replace(";", ",").replace("\n", ",").replace(" ", ",")
-        return [a.strip() for a in raw.split(",") if a.strip()]
+        """Odbiorcy powiadomień o błędach."""
+        return _parse_addrs(self.to_addrs)
+
+    def report_recipients(self) -> List[str]:
+        """Odbiorcy raportu zbiorczego."""
+        return _parse_addrs(self.report_to_addrs)
 
     def sender(self) -> str:
         return self.from_addr.strip() or self.username.strip()
@@ -83,9 +89,14 @@ class EmailConfig:
         out = {k: getattr(self, k) for k in
                ("enabled", "host", "port", "username", "use_ssl",
                 "use_starttls", "from_addr", "to_addrs", "min_level",
-                "report", "report_time", "report_weekday")}
+                "report", "report_time", "report_weekday", "report_to_addrs")}
         out["has_password"] = bool(self.password_obf)
         return out
+
+
+def _parse_addrs(raw: str) -> List[str]:
+    raw = (raw or "").replace(";", ",").replace("\n", ",").replace(" ", ",")
+    return [a.strip() for a in raw.split(",") if a.strip()]
 
 
 def load_email_config() -> EmailConfig:
@@ -107,14 +118,16 @@ def _level_passes(level: str, min_level: str) -> bool:
     return _LEVEL_WEIGHT.get(level, 0) >= _MIN_LEVEL_THRESHOLD.get(min_level, 1)
 
 
-def send_email(cfg: EmailConfig, subject: str, body: str) -> None:
+def send_email(cfg: EmailConfig, subject: str, body: str,
+               recipients: Optional[List[str]] = None) -> None:
     """Synchroniczna wysyłka (blokująca) — wołać z wątku. Rzuca wyjątek
-    z czytelnym opisem przy błędzie."""
-    recipients = cfg.recipients()
+    z czytelnym opisem przy błędzie. `recipients` jawnie, bo powiadomienia
+    i raporty mają OSOBNE listy odbiorców (domyślnie: odbiorcy powiadomień)."""
+    recipients = cfg.recipients() if recipients is None else recipients
     if not cfg.host:
         raise ValueError("Brak adresu serwera SMTP.")
     if not recipients:
-        raise ValueError("Brak adresatów powiadomień.")
+        raise ValueError("Brak adresatów.")
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -298,17 +311,28 @@ class Notifier:
 
     def send_test(self, cfg: EmailConfig) -> None:
         """Testowa wiadomość z przycisku w ustawieniach (synchronicznie —
-        endpoint chce od razu wiedzieć, czy się udało)."""
+        endpoint chce od razu wiedzieć, czy się udało). Wysyłamy do WSZYSTKICH
+        skonfigurowanych odbiorców (powiadomienia + raport), bo test sprawdza
+        po prostu, czy serwer SMTP działa."""
+        # unia z zachowaniem kolejności (bez duplikatów)
+        recipients = list(dict.fromkeys(cfg.recipients() + cfg.report_recipients()))
+        if not recipients:
+            raise ValueError("Nie podano żadnego adresu odbiorcy.")
         send_email(cfg, "[FortiBackup] Wiadomość testowa",
                    "To jest testowe powiadomienie z FortiBackup Web.\n"
-                   "Jeśli je widzisz, konfiguracja email działa poprawnie.")
+                   "Jeśli je widzisz, konfiguracja email działa poprawnie.",
+                   recipients=recipients)
 
     def _maybe_send_report(self, now: Optional[datetime] = None) -> None:
         """Raz na okres (daily/weekly) po zaplanowanej godzinie wysyła zbiorczy
         raport backupów. Nie zależy od logowania — czyta tylko dziennik.
         Odporny na restart (nadrabia miniony termin) i na dubel (stan na dysku)."""
         cfg = load_email_config()
-        if not cfg.enabled or cfg.report not in ("daily", "weekly"):
+        # raport jest NIEZALEŻNY od powiadomień (cfg.enabled) — wystarczy tryb
+        # daily/weekly, skonfigurowany serwer i własna lista odbiorców raportu
+        if cfg.report not in ("daily", "weekly"):
+            return
+        if not cfg.host or not cfg.report_recipients():
             return
         now = now or datetime.now()
         hh, mm = _parse_hhmm(cfg.report_time)
@@ -329,7 +353,7 @@ class Notifier:
         state["last_report_attempt"] = now.timestamp()
         _save_report_state(state)
         try:
-            send_email(cfg, subject, body)
+            send_email(cfg, subject, body, recipients=cfg.report_recipients())
         except Exception as e:  # noqa: BLE001 — źródło notify => bez pętli
             EVENTLOG.log("error", f"Wysyłka raportu email nie powiodła się: {e}",
                          NOTIFY_SOURCE)
@@ -346,7 +370,7 @@ class Notifier:
         label = "tygodniowy" if weekly else "dzienny"
         events = collect_backup_events(period)
         subject, body = build_report(events, label)
-        send_email(cfg, subject, body)
+        send_email(cfg, subject, body, recipients=cfg.report_recipients())
         return len(events)
 
 

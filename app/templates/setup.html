@@ -89,20 +89,14 @@
         {% if email and logged %}
         <!-- POWIADOMIENIA EMAIL (tylko dla zalogowanych) -->
         <div class="mt-8 bg-[#161b22] border border-[#30363d] rounded-2xl p-8">
-            <h2 class="text-xl font-bold mb-1"><i class="fa-solid fa-envelope mr-2 text-[#1f6feb]"></i>Powiadomienia email</h2>
-            <p class="text-sm text-[#8b949e] mb-6">
-                Wysyłka ostrzeżeń i błędów z globalnego dziennika na wskazany adres. 
-                Zdarzenia są grupowane w wiadomości wysyłanej raz na minutę.
-            </p>
+            <h2 class="text-xl font-bold mb-6"><i class="fa-solid fa-envelope mr-2 text-[#1f6feb]"></i>Powiadomienia email</h2>
 
             <div id="email-msg" class="hidden mb-4 p-3 rounded-lg text-sm"></div>
 
             <form id="email-form" class="space-y-5" onsubmit="return false;">
-                <label class="flex items-center gap-x-3">
-                    <input type="checkbox" id="em-enabled" {% if email.enabled %}checked{% endif %}
-                           class="w-4 h-4 accent-[#1f6feb]">
-                    <span class="text-sm font-medium">Włącz powiadomienia email</span>
-                </label>
+
+                <!-- ─── SEKCJA 1: SERWER SMTP ─── -->
+                <h3 class="text-sm font-semibold"><i class="fa-solid fa-server mr-2 text-[#8b949e]"></i>Serwer SMTP</h3>
 
                 <div class="grid grid-cols-3 gap-4">
                     <div class="col-span-2">
@@ -142,33 +136,47 @@
                     </label>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm mb-1">Adres nadawcy (From)</label>
-                        <input type="text" id="em-from" value="{{ email.from_addr }}" placeholder="fortibackup@example.com"
-                               class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
-                    </div>
-                    <div>
-                        <label class="block text-sm mb-1">Wysyłaj od poziomu</label>
-                        <select id="em-level" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
-                            <option value="warning" {% if email.min_level == 'warning' %}selected{% endif %}>Ostrzeżenia i błędy</option>
-                            <option value="error" {% if email.min_level == 'error' %}selected{% endif %}>Tylko błędy</option>
-                        </select>
-                    </div>
-                </div>
-
                 <div>
-                    <label class="block text-sm mb-1">Odbiorcy</label>
-                    <input type="text" id="em-to" value="{{ email.to_addrs }}" placeholder="admin@example.com, drugi@example.com"
+                    <label class="block text-sm mb-1">Adres nadawcy (From)</label>
+                    <input type="text" id="em-from" value="{{ email.from_addr }}" placeholder="fortibackup@example.com"
                            class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
-                    <p class="text-xs text-[#8b949e] mt-1">Wiele adresów rozdziel przecinkiem.</p>
                 </div>
 
-                <!-- RAPORT ZBIORCZY WYKONANYCH BACKUPÓW -->
-                <div class="border-t border-[#30363d] pt-5">
-                    <h3 class="text-sm font-semibold mb-1"><i class="fa-solid fa-calendar-check mr-2 text-[#3fb950]"></i>Raport wykonanych backupów</h3>
-                    <p class="text-xs text-[#8b949e] mb-3">
-                        Zbiorczy raport wysyłany cyklicznie.
+                <!-- ─── SEKCJA 2: POWIADOMIENIA O BŁĘDACH ─── -->
+                <div class="border-t border-[#30363d] pt-5 space-y-4">
+                    <h3 class="text-sm font-semibold"><i class="fa-solid fa-triangle-exclamation mr-2 text-[#d29922]"></i>Powiadomienia o błędach</h3>
+                    <p class="text-xs text-[#8b949e]">
+                        Wysyłka ostrzeżeń i błędów z globalnego dziennika (np. nieudany backup).
+                        Zdarzenia są grupowane w wiadomości wysyłanej raz na minutę.
+                    </p>
+                    <label class="flex items-center gap-x-3">
+                        <input type="checkbox" id="em-enabled" {% if email.enabled %}checked{% endif %}
+                               class="w-4 h-4 accent-[#1f6feb]">
+                        <span class="text-sm font-medium">Włącz powiadomienia o błędach</span>
+                    </label>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm mb-1">Wysyłaj od poziomu</label>
+                            <select id="em-level" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                                <option value="warning" {% if email.min_level == 'warning' %}selected{% endif %}>Ostrzeżenia i błędy</option>
+                                <option value="error" {% if email.min_level == 'error' %}selected{% endif %}>Tylko błędy</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm mb-1">Odbiorcy powiadomień</label>
+                            <input type="text" id="em-to" value="{{ email.to_addrs }}" placeholder="admin@example.com, drugi@example.com"
+                                   class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                        </div>
+                    </div>
+                    <button type="button" onclick="testEmail()"
+                            class="px-5 py-2 border border-[#30363d] hover:bg-[#21262d] rounded-lg text-sm">Testowe powiadomienie</button>
+                </div>
+
+                <!-- ─── SEKCJA 3: RAPORT WYKONANYCH BACKUPÓW ─── -->
+                <div class="border-t border-[#30363d] pt-5 space-y-4">
+                    <h3 class="text-sm font-semibold"><i class="fa-solid fa-calendar-check mr-2 text-[#3fb950]"></i>Raport wykonanych backupów</h3>
+                    <p class="text-xs text-[#8b949e]">
+                        Zbiorczy raport kopii zapasowych wysyłany cyklicznie.
                         Działa niezależnie od powiadomień o błędach.
                     </p>
                     <div class="grid grid-cols-3 gap-4">
@@ -198,15 +206,20 @@
                             </select>
                         </div>
                     </div>
+                    <div>
+                        <label class="block text-sm mb-1">Odbiorcy raportu</label>
+                        <input type="text" id="em-report-to" value="{{ email.report_to_addrs }}" placeholder="raporty@example.com"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                        <p class="text-xs text-[#8b949e] mt-1">Wiele adresów rozdziel przecinkiem.</p>
+                    </div>
+                    <button type="button" onclick="reportNow()"
+                            class="px-5 py-2 border border-[#30363d] hover:bg-[#21262d] rounded-lg text-sm">Testowy raport</button>
                 </div>
 
-                <div class="flex flex-wrap gap-3 pt-2">
+                <!-- zapis całości -->
+                <div class="border-t border-[#30363d] pt-5">
                     <button type="button" onclick="saveEmail()"
-                            class="px-6 py-2.5 bg-[#1f6feb] hover:bg-[#388bfd] rounded-lg font-semibold">Zapisz</button>
-                    <button type="button" onclick="testEmail()"
-                            class="px-6 py-2.5 border border-[#30363d] hover:bg-[#21262d] rounded-lg">Testowe powiadomienie</button>
-                    <button type="button" onclick="reportNow()"
-                            class="px-6 py-2.5 border border-[#30363d] hover:bg-[#21262d] rounded-lg">Testowy raport</button>
+                            class="px-6 py-2.5 bg-[#1f6feb] hover:bg-[#388bfd] rounded-lg font-semibold">Zapisz ustawienia email</button>
                 </div>
             </form>
         </div>
@@ -227,6 +240,7 @@
                 fd.append('report', document.getElementById('em-report').value);
                 fd.append('report_time', document.getElementById('em-report-time').value);
                 fd.append('report_weekday', document.getElementById('em-report-weekday').value);
+                fd.append('report_to_addrs', document.getElementById('em-report-to').value);
                 return fd;
             }
             function toggleReportFields() {
