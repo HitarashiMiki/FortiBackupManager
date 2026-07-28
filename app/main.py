@@ -51,6 +51,7 @@ from .fortigate import run_backup, device_backup_dir, sanitize_name, BACKUP_DIR
 from .diff import make_diff_html
 from .changes import changed_flags, detect_and_log, find_backup_dir_for_host
 from .audit import run_audit
+from .retention import apply_retention, RETENTION_MODES
 from .security import (SESSIONS, LOGIN_LIMITER, get_or_create_secret,
                        safe_backup_path, PathTraversalError)
 from .jobs import JOBS
@@ -141,7 +142,9 @@ templates = Jinja2Templates(directory="app/templates")
 _DEVICE_PUBLIC_FIELDS = ("name", "host", "port", "username", "method",
                          "api_port", "vdom_enabled", "description", "folder",
                          "sched_enabled", "sched_mode", "sched_every_hours",
-                         "sched_time", "sched_weekday")
+                         "sched_time", "sched_weekday",
+                         "retention_mode", "retention_count", "retention_days",
+                         "gfs_daily", "gfs_weekly", "gfs_monthly")
 
 
 def _device_public(d: Device) -> dict:
@@ -664,6 +667,10 @@ def update_device(
             # katalog backupów (jawny, a gdy go nie było — pochodną starej nazwy)
             backup_dir=(old.backup_dir if new_name.strip() == old.name
                         else old.backup_dir or sanitize_name(old.name)),
+            # retencja ma osobny formularz (modal) — edycja urządzenia jej nie tyka
+            retention_mode=old.retention_mode, retention_count=old.retention_count,
+            retention_days=old.retention_days, gfs_daily=old.gfs_daily,
+            gfs_weekly=old.gfs_weekly, gfs_monthly=old.gfs_monthly,
             sched_enabled=sched_enabled, sched_mode=sched_mode,
             sched_every_hours=sched_every_hours, sched_time=sched_time.strip(),
             sched_weekday=sched_weekday,
@@ -697,6 +704,71 @@ def move_device(name: str, folder: str = Form(""),
             raise HTTPException(status_code=400, detail=str(e))
         target = folder.strip() or "poza foldery"
         return {"status": "ok", "message": f"Przeniesiono '{name}' → {target}"}
+
+
+# ======================== RETENCJA ========================
+
+@app.post("/api/devices/{name}/retention")
+def save_retention(
+    name: str,
+    retention_mode: str = Form("off"),
+    retention_count: int = Form(30),
+    retention_days: int = Form(90),
+    gfs_daily: int = Form(7),
+    gfs_weekly: int = Form(4),
+    gfs_monthly: int = Form(12),
+    mp: str = Depends(get_master_password),
+):
+    if retention_mode not in RETENTION_MODES:
+        raise HTTPException(status_code=400, detail="Nieznany tryb retencji.")
+    with open_db_storage() as st:
+        db = _load_db(st, mp)
+        device = db.get(name)
+        if not device:
+            raise HTTPException(status_code=404, detail="Urządzenie nie istnieje")
+        # liczniki nieujemne; count/gfs-daily min. 1, by nie skasować wszystkiego
+        device.retention_mode = retention_mode
+        device.retention_count = max(1, retention_count)
+        device.retention_days = max(1, retention_days)
+        device.gfs_daily = max(0, gfs_daily)
+        device.gfs_weekly = max(0, gfs_weekly)
+        device.gfs_monthly = max(0, gfs_monthly)
+        db.upsert(device, old_name=name)
+        return {"status": "ok", "message": "Zapisano ustawienia retencji."}
+
+
+def _run_retention_job(job, cfg: StorageConfig, mp: str, device_name: str):
+    """Wątek roboczy: ręczne zastosowanie retencji (usuwanie z magazynu)."""
+    ok = True
+    try:
+        with open_db_storage() as dbst:
+            device = _load_db(dbst, mp).get(device_name)
+        if not device:
+            JOBS.log(job, "Urządzenie nie istnieje.")
+            ok = False
+        elif device.retention_mode == "off":
+            JOBS.log(job, "Retencja wyłączona — nic nie usuwam.")
+        else:
+            with open_storage(cfg) as st:
+                removed = apply_retention(device, st, logger=lambda m: JOBS.log(job, m))
+                JOBS.log(job, f"Zakończono. Usunięto {removed} kopii.")
+                job.ok_count += 1
+    except Exception as e:  # noqa: BLE001
+        JOBS.log(job, f"BŁĄD: {e}")
+        ok = False
+    JOBS.finish(job, ok)
+
+
+@app.post("/api/devices/{name}/retention/apply")
+def apply_retention_now(name: str, mp: str = Depends(get_master_password)):
+    """Zastosuj retencję teraz (bez czekania na kolejny backup). Usuwanie
+    z magazynu leci jako job w tle — UI polluje wynik jak przy backupie."""
+    cfg = get_storage_config()
+    job = JOBS.create(f"Retencja: {name}")
+    JOBS.log(job, f"Zastosowanie retencji dla {name}")
+    threading.Thread(target=_run_retention_job, args=(job, cfg, mp, name),
+                     daemon=True).start()
+    return {"status": "started", "job_id": job.id}
 
 
 # ======================== FOLDERY ========================
@@ -770,6 +842,12 @@ def _run_backup_job(job, cfg: StorageConfig, mp: str, device_names: Optional[lis
                                    device=dev)
                     job.ok_count += 1
                     EVENTLOG.log("success", f"Backup OK: {dev.name} → {path}", "backup")
+                    # przytnij stare kopie wg retencji (best-effort — błąd
+                    # retencji nie może unieważnić udanego backupu)
+                    try:
+                        apply_retention(dev, st, logger=lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}"))
+                    except Exception as e:  # noqa: BLE001
+                        JOBS.log(job, f"[{dev.name}] Retencja pominięta: {e}")
                 except Exception as e:  # noqa: BLE001
                     JOBS.log(job, f"[{dev.name}] BŁĄD: {e}")
                     job.fail_count += 1

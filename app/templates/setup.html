@@ -8,6 +8,11 @@
 </head>
 <body class="bg-[#0d1117] text-[#c9d1d9]">
     <div class="max-w-2xl mx-auto mt-12 p-8">
+        {% if logged %}
+        <a href="/" class="inline-flex items-center gap-x-2 text-sm text-[#8b949e] hover:text-[#c9d1d9] mb-6">
+            <i class="fa-solid fa-arrow-left"></i> Wróć do listy urządzeń
+        </a>
+        {% endif %}
         {% if configured %}
         <h1 class="text-3xl font-bold mb-2">Zmiana konfiguracji magazynu</h1>
         <p class="text-[#8b949e] mb-8">
@@ -295,8 +300,12 @@
             </form>
         </div>
 
-        <p class="text-center mt-6">
+        <p class="text-center mt-6 space-x-4">
+            {% if logged %}
+            <a href="/" class="text-sm text-[#8b949e] hover:text-[#c9d1d9]">← Wróć do listy urządzeń</a>
+            {% else %}
             <a href="/login" class="text-sm text-[#8b949e] hover:text-[#c9d1d9]">← Wróć do logowania</a>
+            {% endif %}
         </p>
         {% endif %}
     </div>

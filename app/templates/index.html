@@ -79,6 +79,10 @@
                             class="px-4 py-2 bg-[#21262d] border border-[#30363d] hover:bg-[#30363d] rounded-lg flex items-center gap-x-2 text-sm">
                         <i class="fa-solid fa-route"></i> <span>Traceroute</span>
                     </button>
+                    <button onclick="showRetentionModal()" title="Retencja — automatyczne usuwanie starych kopii"
+                            class="px-4 py-2 bg-[#21262d] border border-[#30363d] hover:bg-[#30363d] rounded-lg flex items-center gap-x-2 text-sm">
+                        <i class="fa-solid fa-broom"></i> <span>Retencja</span>
+                    </button>
                     <button onclick="backupSelectedDevice()"
                             class="px-5 py-2 bg-[#1f6feb] hover:bg-[#388bfd] rounded-lg flex items-center gap-x-2 text-sm">
                         <i class="fa-solid fa-download"></i> <span>Backup teraz</span>
@@ -277,6 +281,73 @@
                 <button onclick="closeDiffModal()" class="text-3xl">&times;</button>
             </div>
             <div id="diff-content" class="flex-1 overflow-auto p-4 font-mono text-sm"></div>
+        </div>
+    </div>
+
+    <!-- MODAL RETENCJI -->
+    <div id="retention-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+        <div class="bg-[#161b22] border border-[#30363d] rounded-2xl w-full max-w-lg modal">
+            <div class="flex justify-between items-center px-6 py-4 border-b border-[#30363d]">
+                <h3 class="text-lg font-semibold"><i class="fa-solid fa-broom mr-2 text-[#1f6feb]"></i>Retencja kopii —
+                    <span id="retention-device" class="text-[#8b949e]"></span></h3>
+                <button onclick="closeRetentionModal()" class="text-3xl leading-none">&times;</button>
+            </div>
+            <div class="p-6 space-y-5">
+                <p class="text-xs text-[#8b949e]">
+                    Automatyczne usuwanie starych kopii.
+                    Najnowsza kopia nigdy nie jest usuwana.
+                </p>
+                <div>
+                    <label class="block text-sm mb-1.5">Tryb retencji</label>
+                    <select id="ret-mode" onchange="toggleRetentionFields()" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5">
+                        <option value="off">Wyłączona (trzymaj wszystko)</option>
+                        <option value="count">Liczba kopii — trzymaj N ostatnich</option>
+                        <option value="days">Wiek — usuń starsze niż N dni</option>
+                        <option value="gfs">GFS — dzienne / tygodniowe / miesięczne</option>
+                    </select>
+                </div>
+
+                <div id="ret-count-box">
+                    <label class="block text-sm mb-1.5">Ile ostatnich kopii trzymać</label>
+                    <input type="number" id="ret-count" value="30" min="1" max="100000"
+                           class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5">
+                </div>
+
+                <div id="ret-days-box">
+                    <label class="block text-sm mb-1.5">Usuń kopie starsze niż (dni)</label>
+                    <input type="number" id="ret-days" value="90" min="1" max="100000"
+                           class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-4 py-2.5">
+                </div>
+
+                <div id="ret-gfs-box" class="grid grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-sm mb-1.5">Dni</label>
+                        <input type="number" id="ret-gfs-daily" value="7" min="0" max="366"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-sm mb-1.5">Tygodni</label>
+                        <input type="number" id="ret-gfs-weekly" value="4" min="0" max="520"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-sm mb-1.5">Miesięcy</label>
+                        <input type="number" id="ret-gfs-monthly" value="12" min="0" max="600"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap justify-between gap-3 pt-2">
+                    <button type="button" onclick="applyRetentionNow()"
+                            class="px-5 py-2.5 border border-[#30363d] hover:bg-[#21262d] rounded-lg text-sm">
+                        <i class="fa-solid fa-play mr-1"></i>Zastosuj teraz
+                    </button>
+                    <div class="flex gap-3">
+                        <button type="button" onclick="closeRetentionModal()" class="px-5 py-2.5 rounded-lg border border-[#30363d]">Anuluj</button>
+                        <button type="button" onclick="saveRetention()" class="px-6 py-2.5 bg-[#1f6feb] hover:bg-[#388bfd] rounded-lg font-semibold">Zapisz</button>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -687,6 +758,71 @@
 
         function pingSelectedDevice() { runNetTool('ping', 'ping'); }
         function tracerouteSelectedDevice() { runNetTool('traceroute', 'traceroute'); }
+
+        // ==================== RETENCJA ====================
+        function toggleRetentionFields() {
+            const mode = document.getElementById('ret-mode').value;
+            document.getElementById('ret-count-box').classList.toggle('hidden', mode !== 'count');
+            document.getElementById('ret-days-box').classList.toggle('hidden', mode !== 'days');
+            document.getElementById('ret-gfs-box').classList.toggle('hidden', mode !== 'gfs');
+        }
+
+        async function showRetentionModal() {
+            if (!currentDevice) { addLog("Najpierw wybierz urządzenie", "error"); return; }
+            let d;
+            try {
+                const res = await fetch(`/api/devices/${encodeURIComponent(currentDevice)}`);
+                if (!res.ok) throw new Error();
+                d = await res.json();
+            } catch (e) { addLog("Nie udało się pobrać ustawień retencji", "error"); return; }
+            document.getElementById('retention-device').textContent = d.name;
+            document.getElementById('ret-mode').value = d.retention_mode || 'off';
+            document.getElementById('ret-count').value = d.retention_count || 30;
+            document.getElementById('ret-days').value = d.retention_days || 90;
+            document.getElementById('ret-gfs-daily').value = d.gfs_daily ?? 7;
+            document.getElementById('ret-gfs-weekly').value = d.gfs_weekly ?? 4;
+            document.getElementById('ret-gfs-monthly').value = d.gfs_monthly ?? 12;
+            toggleRetentionFields();
+            const m = document.getElementById('retention-modal');
+            m.classList.remove('hidden'); m.classList.add('flex');
+        }
+
+        function closeRetentionModal() {
+            const m = document.getElementById('retention-modal');
+            m.classList.remove('flex'); m.classList.add('hidden');
+        }
+
+        function retentionFormData() {
+            const fd = new FormData();
+            fd.append('retention_mode', document.getElementById('ret-mode').value);
+            fd.append('retention_count', document.getElementById('ret-count').value);
+            fd.append('retention_days', document.getElementById('ret-days').value);
+            fd.append('gfs_daily', document.getElementById('ret-gfs-daily').value);
+            fd.append('gfs_weekly', document.getElementById('ret-gfs-weekly').value);
+            fd.append('gfs_monthly', document.getElementById('ret-gfs-monthly').value);
+            return fd;
+        }
+
+        async function saveRetention() {
+            const res = await fetch(`/api/devices/${encodeURIComponent(currentDevice)}/retention`,
+                                    { method: 'POST', body: retentionFormData() });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok) { addLog(data.message || 'Zapisano retencję', 'success'); closeRetentionModal(); }
+            else addLog(data.detail || 'Błąd zapisu retencji', 'error');
+        }
+
+        async function applyRetentionNow() {
+            if (!confirm('Zastosować retencję teraz? Nadmiarowe kopie zostaną usunięte z magazynu.')) return;
+            // najpierw zapisz aktualne ustawienia z formularza, potem zastosuj
+            await fetch(`/api/devices/${encodeURIComponent(currentDevice)}/retention`,
+                        { method: 'POST', body: retentionFormData() });
+            const res = await fetch(`/api/devices/${encodeURIComponent(currentDevice)}/retention/apply`,
+                                    { method: 'POST' });
+            if (!res.ok) { addLog("Nie udało się uruchomić retencji", "error"); return; }
+            const data = await res.json();
+            closeRetentionModal();
+            pollJob(data.job_id, () => { if (currentDevice) loadVersions(currentDevice); });
+        }
 
         // ==================== COMPARE ====================
         let diffPaths = null;
