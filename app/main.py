@@ -386,7 +386,8 @@ def reset_setup(request: Request, confirm_password: str = Form("")):
 
 def _email_from_form(enabled, host, port, username, password, use_ssl,
                      use_starttls, from_addr, to_addrs, min_level,
-                     report="off", report_time="08:00", report_weekday=0) -> EmailConfig:
+                     report="off", report_time="08:00", report_weekday=0,
+                     report_to_addrs="") -> EmailConfig:
     old = load_email_config()
     return EmailConfig(
         enabled=enabled, host=host.strip(), port=port,
@@ -394,11 +395,13 @@ def _email_from_form(enabled, host, port, username, password, use_ssl,
         # puste pole hasła = zachowaj dotychczasowe (jak przy magazynie/urządzeniach)
         password_obf=_obf(password) if password else old.password_obf,
         use_ssl=use_ssl, use_starttls=use_starttls,
-        from_addr=from_addr.strip(), to_addrs=to_addrs.strip(),
+        from_addr=from_addr.strip(),
+        to_addrs=to_addrs.strip(),            # odbiorcy powiadomień
         min_level=min_level if min_level in ("warning", "error") else "warning",
         report=report if report in ("off", "daily", "weekly") else "off",
         report_time=report_time.strip() or "08:00",
         report_weekday=report_weekday,
+        report_to_addrs=report_to_addrs.strip(),   # odbiorcy raportu (osobno)
     )
 
 
@@ -422,15 +425,19 @@ def save_email(
     report: str = Form("off"),
     report_time: str = Form("08:00"),
     report_weekday: int = Form(0),
+    report_to_addrs: str = Form(""),
     mp: str = Depends(get_master_password),
 ):
     cfg = _email_from_form(enabled, host, port, username, password, use_ssl,
                            use_starttls, from_addr, to_addrs, min_level,
-                           report, report_time, report_weekday)
-    # odbiorcy wymagani, gdy włączone powiadomienia LUB raport
-    if (cfg.enabled or cfg.report != "off") and not cfg.recipients():
+                           report, report_time, report_weekday, report_to_addrs)
+    # każda włączona funkcja wymaga SWOICH odbiorców (listy są niezależne)
+    if cfg.enabled and not cfg.recipients():
         raise HTTPException(status_code=400,
-                            detail="Włączono powiadomienia/raport, ale nie podano żadnego adresu odbiorcy.")
+                            detail="Włączono powiadomienia, ale nie podano odbiorców powiadomień.")
+    if cfg.report != "off" and not cfg.report_recipients():
+        raise HTTPException(status_code=400,
+                            detail="Włączono raport, ale nie podano odbiorców raportu.")
     save_email_config(cfg)
     return {"status": "ok", "message": "Zapisano konfigurację powiadomień email."}
 
@@ -450,18 +457,20 @@ def test_email(
     report: str = Form("off"),
     report_time: str = Form("08:00"),
     report_weekday: int = Form(0),
+    report_to_addrs: str = Form(""),
     mp: str = Depends(get_master_password),
 ):
     """Wysyła testowy mail z DANYCH Z FORMULARZA, żeby dało
     się sprawdzić ustawienia przed zapisaniem. Puste hasło = użyj zapisanego."""
     cfg = _email_from_form(enabled, host, port, username, password, use_ssl,
                            use_starttls, from_addr, to_addrs, min_level,
-                           report, report_time, report_weekday)
+                           report, report_time, report_weekday, report_to_addrs)
     try:
         NOTIFIER.send_test(cfg)
     except Exception as e:  # noqa: BLE001 — pokaż użytkownikowi przyczynę
-        raise HTTPException(status_code=400, detail=f"Wysyłka testowa nie powiodła się: {e}")
-    return {"status": "ok", "message": f"Wysłano wiadomość testową do: {', '.join(cfg.recipients())}"}
+        raise HTTPException(status_code=400, detail=f"Wysyłka powiadomienia nie powiodła się: {e}")
+    recipients = list(dict.fromkeys(cfg.recipients() + cfg.report_recipients()))
+    return {"status": "ok", "message": f"Wysłano wiadomość testową do: {', '.join(recipients)}"}
 
 
 @app.post("/api/email/report-now")
@@ -479,18 +488,19 @@ def report_now(
     report: str = Form("daily"),
     report_time: str = Form("08:00"),
     report_weekday: int = Form(0),
+    report_to_addrs: str = Form(""),
     mp: str = Depends(get_master_password),
 ):
     """Natychmiastowy raport, cotygodniowy lub codzienny"""
     cfg = _email_from_form(enabled, host, port, username, password, use_ssl,
                            use_starttls, from_addr, to_addrs, min_level,
                            report if report != "off" else "daily",
-                           report_time, report_weekday)
+                           report_time, report_weekday, report_to_addrs)
     try:
         n = NOTIFIER.send_report_now(cfg)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Wysyłka raportu nie powiodła się: {e}")
-    return {"status": "ok", "message": f"Wysłano raport ({n} zdarzeń) do: {', '.join(cfg.recipients())}"}
+    return {"status": "ok", "message": f"Wysłano raport ({n} zdarzeń) do: {', '.join(cfg.report_recipients())}"}
 
 
 # ======================== MAIN PAGE ========================
