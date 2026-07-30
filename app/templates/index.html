@@ -713,6 +713,10 @@
                         } else {
                             addLog(`Zakończono z błędami: ${job.ok_count} OK, ${job.fail_count} błędów`, 'error');
                         }
+                        // job dopisał zdarzenia do globalnego dziennika (np. wynik
+                        // backupu, retencja) — odśwież widok globalny i badge błędów
+                        refreshGlobalErrorBadge();
+                        if (activeLogTab === 'global') loadGlobalLog();
                         if (onFinish) onFinish(job);
                     }
                 } catch (e) { clearInterval(interval); }
