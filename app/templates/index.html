@@ -70,27 +70,43 @@
                     <h2 id="current-device-name" class="text-2xl font-semibold">Wybierz urządzenie</h2>
                     <p id="current-device-host" class="text-[#8b949e]"></p>
                 </div>
-                <div class="flex gap-x-2">
-                    <button onclick="pingSelectedDevice()" title="Ping (4 pakiety) — wynik w dzienniku zdarzeń"
-                            class="px-4 py-2 bg-[#21262d] border border-[#30363d] hover:bg-[#30363d] rounded-lg flex items-center gap-x-2 text-sm">
-                        <i class="fa-solid fa-satellite-dish"></i> <span>Ping</span>
-                    </button>
-                    <button onclick="tracerouteSelectedDevice()" title="Traceroute — wynik w dzienniku zdarzeń"
-                            class="px-4 py-2 bg-[#21262d] border border-[#30363d] hover:bg-[#30363d] rounded-lg flex items-center gap-x-2 text-sm">
-                        <i class="fa-solid fa-route"></i> <span>Traceroute</span>
-                    </button>
-                    <button onclick="showRetentionModal()" title="Retencja — automatyczne usuwanie starych kopii"
-                            class="px-4 py-2 bg-[#21262d] border border-[#30363d] hover:bg-[#30363d] rounded-lg flex items-center gap-x-2 text-sm">
-                        <i class="fa-solid fa-broom"></i> <span>Retencja</span>
-                    </button>
-                    <button onclick="backupSelectedDevice()"
-                            class="px-5 py-2 bg-[#1f6feb] hover:bg-[#388bfd] rounded-lg flex items-center gap-x-2 text-sm">
-                        <i class="fa-solid fa-download"></i> <span>Backup teraz</span>
-                    </button>
-                    <button onclick="backupAllDevices()"
-                            class="px-4 py-2 bg-[#21262d] border border-[#30363d] rounded-lg text-sm">
-                        Backup wszystkich
-                    </button>
+                <div class="flex gap-x-2 flex-shrink-0">
+                    <!-- Narzędzia: Ping / Traceroute / Retencja -->
+                    <div class="relative">
+                        <button onclick="toggleMenu(event, 'tools-menu')" title="Narzędzia urządzenia"
+                                class="px-4 py-2 bg-[#21262d] border border-[#30363d] hover:bg-[#30363d] rounded-lg flex items-center gap-x-2 text-sm">
+                            <i class="fa-solid fa-screwdriver-wrench"></i> <span>Narzędzia</span>
+                            <i class="fa-solid fa-chevron-down text-xs opacity-70"></i>
+                        </button>
+                        <div id="tools-menu" class="dropdown-menu hidden absolute right-0 mt-1 w-52 bg-[#161b22] border border-[#30363d] rounded-lg shadow-xl overflow-hidden z-30">
+                            <button onclick="menuAction(pingSelectedDevice)" class="w-full text-left px-4 py-2.5 text-sm hover:bg-[#21262d] flex items-center gap-x-3">
+                                <i class="fa-solid fa-satellite-dish w-4 text-[#8b949e]"></i> Ping
+                            </button>
+                            <button onclick="menuAction(tracerouteSelectedDevice)" class="w-full text-left px-4 py-2.5 text-sm hover:bg-[#21262d] flex items-center gap-x-3">
+                                <i class="fa-solid fa-route w-4 text-[#8b949e]"></i> Traceroute
+                            </button>
+                            <button onclick="menuAction(showRetentionModal)" class="w-full text-left px-4 py-2.5 text-sm hover:bg-[#21262d] flex items-center gap-x-3">
+                                <i class="fa-solid fa-broom w-4 text-[#8b949e]"></i> Retencja
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Backup: teraz / wszystkich -->
+                    <div class="relative">
+                        <button onclick="toggleMenu(event, 'backup-menu')"
+                                class="px-5 py-2 bg-[#1f6feb] hover:bg-[#388bfd] rounded-lg flex items-center gap-x-2 text-sm">
+                            <i class="fa-solid fa-download"></i> <span>Backup</span>
+                            <i class="fa-solid fa-chevron-down text-xs opacity-80"></i>
+                        </button>
+                        <div id="backup-menu" class="dropdown-menu hidden absolute right-0 mt-1 w-56 bg-[#161b22] border border-[#30363d] rounded-lg shadow-xl overflow-hidden z-30">
+                            <button onclick="menuAction(backupSelectedDevice)" class="w-full text-left px-4 py-2.5 text-sm hover:bg-[#21262d] flex items-center gap-x-3">
+                                <i class="fa-solid fa-download w-4 text-[#8b949e]"></i> Backup wybranego
+                            </button>
+                            <button onclick="menuAction(backupAllDevices)" class="w-full text-left px-4 py-2.5 text-sm hover:bg-[#21262d] flex items-center gap-x-3">
+                                <i class="fa-solid fa-layer-group w-4 text-[#8b949e]"></i> Backup wszystkich
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -742,9 +758,24 @@
             pollJob(data.job_id, () => { if (currentDevice) loadVersions(currentDevice); });
         }
 
-        // ==================== NARZĘDZIA SIECIOWE ====================
-        // Ping/traceroute działają jak backup: serwer tworzy job, a UI
-        // dociąga kolejne linie outputu do dziennika zdarzeń na dole.
+        // ==================== ROZWIJANE MENU (Backup / Narzędzia) ====================
+        function closeMenus() {
+            document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.add('hidden'));
+        }
+        function toggleMenu(e, id) {
+            e.stopPropagation();               // nie zamykaj od razu przez listener na document
+            const el = document.getElementById(id);
+            const wasHidden = el.classList.contains('hidden');
+            closeMenus();
+            if (wasHidden) el.classList.remove('hidden');
+        }
+        // wybór z menu: zamknij i wykonaj akcję
+        function menuAction(fn) { closeMenus(); fn(); }
+        // klik poza menu / Esc zamyka
+        document.addEventListener('click', closeMenus);
+        document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenus(); });
+
+        // ==================== Network Tools ====================
         async function runNetTool(endpoint, label) {
             if (!currentDevice) {
                 addLog("Najpierw wybierz urządzenie", "error");
