@@ -39,10 +39,13 @@ from typing import List, Optional, Callable
 from .devicedb import Device, DB_FILENAME
 from .fortigate import device_backup_dir
 from .storage import RemoteStorage, RemoteFile
+from .eventlog import EVENTLOG
 
 Logger = Callable[[str], None]
 
 RETENTION_MODES = ("off", "count", "days", "gfs")
+# Źródło zdarzeń retencji w globalnym dzienniku (raport je zlicza osobno)
+RETENTION_SOURCE = "retention"
 
 # Timestamp w nazwie backupu: ..._YYYYmmdd_HHMMSS
 _RE_TS = re.compile(r"_(\d{8}_\d{6})$")
@@ -175,7 +178,14 @@ def apply_retention(device: Device, storage: RemoteStorage,
         except Exception as e:  # noqa: BLE001
             if logger:
                 logger(f"Retencja: nie udało się usunąć {f.name}: {e}")
-    if removed and logger:
-        logger(f"Retencja: usunięto {removed} starych kopii "
-                f"(pozostało {len(backups) - removed}).")
+    if removed:
+        remaining = len(backups) - removed
+        msg = (f"Retencja: usunięto {removed} nadmiarowych kopii urządzenia "
+               f"'{device.name}' (pozostało {remaining}).")
+        if logger:
+            logger(msg)
+        # trwały wpis w globalnym dzienniku + dane liczbowe dla raportu
+        EVENTLOG.log("info", msg, RETENTION_SOURCE,
+                     extra={"removed": removed, "remaining": remaining,
+                            "device": device.name})
     return removed

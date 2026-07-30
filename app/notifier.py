@@ -48,6 +48,7 @@ NOTIFY_SOURCE = "notify"    # źródło zdarzeń wysyłki — IGNOROWANE przez q
 REPORT_RETRY_SECONDS = 1800 # po nieudanej wysyłce raportu ponów nie częściej niż co 30 min
 
 _BACKUP_SOURCES = ("backup", "scheduler")
+RETENTION_SOURCE = "retention"
 
 # Progi: które poziomy dziennika wyzwalają maila. Waga zdarzenia >= próg.
 _LEVEL_WEIGHT = {"info": 0, "success": 0, "warning": 1, "error": 2}
@@ -213,25 +214,50 @@ def last_scheduled(now: datetime, mode: str, hh: int, mm: int,
     return None
 
 
-def collect_backup_events(period_seconds: float,
-                          now_ts: Optional[float] = None) -> List[dict]:
-    """Zdarzenia backupu (OK/błąd) z dziennika z ostatniego okresu,
-    chronologicznie."""
+def _collect_by_source(sources, period_seconds: float,
+                       now_ts: Optional[float]) -> List[dict]:
     now_ts = now_ts if now_ts is not None else time.time()
     cutoff = now_ts - period_seconds
     events = [e for e in EVENTLOG.recent(limit=10_000)
-              if e.get("source") in _BACKUP_SOURCES and e.get("ts", 0) >= cutoff]
+              if e.get("source") in sources and e.get("ts", 0) >= cutoff]
     events.reverse()   # recent() daje najnowsze pierwsze — raport chce chronologicznie
     return events
 
 
-def build_report(events: List[dict], label: str) -> tuple:
+def collect_backup_events(period_seconds: float,
+                          now_ts: Optional[float] = None) -> List[dict]:
+    """Zdarzenia backupu (OK/błąd) z dziennika z ostatniego okresu."""
+    return _collect_by_source(_BACKUP_SOURCES, period_seconds, now_ts)
+
+
+def collect_retention_events(period_seconds: float,
+                             now_ts: Optional[float] = None) -> List[dict]:
+    """Zdarzenia retencji (usunięcia kopii) z ostatniego okresu."""
+    return _collect_by_source((RETENTION_SOURCE,), period_seconds, now_ts)
+
+
+def _sum_removed(retention_events: List[dict]) -> int:
+    """Suma usuniętych kopii — z ustrukturyzowanego pola 'extra' (nie z tekstu)."""
+    total = 0
+    for e in retention_events:
+        try:
+            total += int((e.get("extra") or {}).get("removed", 0))
+        except (TypeError, ValueError):
+            pass
+    return total
+
+
+def build_report(events: List[dict], label: str,
+                 retention_events: Optional[List[dict]] = None) -> tuple:
+    retention_events = retention_events or []
     ok = [e for e in events if e["level"] == "success"]
     fail = [e for e in events if e["level"] == "error"]
+    removed_total = _sum_removed(retention_events)
     subject = f"[FortiBackup] Raport {label}: {len(ok)} OK, {len(fail)} nieudanych"
     lines = [f"Raport {label} wykonanych backupów FortiGate.", ""]
     lines.append(f"Backupy zakończone sukcesem: {len(ok)}")
     lines.append(f"Backupy nieudane:           {len(fail)}")
+    lines.append(f"Kopie usunięte (retencja):  {removed_total}")
     lines.append("")
     if fail:
         lines.append("── NIEUDANE ─────────────────────────────")
@@ -244,7 +270,13 @@ def build_report(events: List[dict], label: str) -> tuple:
         for e in ok:
             ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(e.get("ts", 0)))
             lines.append(f"  [{ts}] {e['message']}")
-    if not events:
+        lines.append("")
+    if retention_events:
+        lines.append("── RETENCJA (usunięte kopie) ────────────")
+        for e in retention_events:
+            ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(e.get("ts", 0)))
+            lines.append(f"  [{ts}] {e['message']}")
+    if not events and not retention_events:
         lines.append("W tym okresie nie wykonano żadnych backupów.")
     return subject, "\n".join(lines)
 
@@ -349,7 +381,8 @@ class Notifier:
         period = 7 * 86400 if cfg.report == "weekly" else 86400
         label = "tygodniowy" if cfg.report == "weekly" else "dzienny"
         events = collect_backup_events(period, now_ts=now.timestamp())
-        subject, body = build_report(events, label)
+        retention = collect_retention_events(period, now_ts=now.timestamp())
+        subject, body = build_report(events, label, retention)
         state["last_report_attempt"] = now.timestamp()
         _save_report_state(state)
         try:
@@ -369,7 +402,8 @@ class Notifier:
         period = 7 * 86400 if weekly else 86400
         label = "tygodniowy" if weekly else "dzienny"
         events = collect_backup_events(period)
-        subject, body = build_report(events, label)
+        retention = collect_retention_events(period)
+        subject, body = build_report(events, label, retention)
         send_email(cfg, subject, body, recipients=cfg.report_recipients())
         return len(events)
 

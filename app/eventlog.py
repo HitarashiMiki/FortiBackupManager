@@ -90,13 +90,18 @@ class EventLog:
         except OSError:
             pass
 
-    def log(self, level: str, message: str, source: str = "") -> None:
+    def log(self, level: str, message: str, source: str = "",
+            extra: Optional[dict] = None) -> None:
         entry = {
             "ts": time.time(),
             "level": level if level in LEVELS else "info",
             "source": source,
             "message": message,
         }
+        if extra:
+            # ustrukturyzowane dane liczbowe (np. ile kopii usunęła retencja),
+            # żeby raport mógł je zsumować bez parsowania tekstu komunikatu
+            entry["extra"] = extra
         with self._lock:
             self._ensure_loaded()
             over = len(self._buf) >= MAX_EVENTS   # deque wypchnie najstarszy
