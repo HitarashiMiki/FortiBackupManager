@@ -663,7 +663,7 @@ def update_device(
             description=description.strip(),
             folder=_validate_folder(db, folder),
             extra=old.extra,
-            # zmiana nazwy nie może gubić historii: przypnij dotychczasowy
+            # zmiana nazwy nie może gubić historii: dotychczasowy
             # katalog backupów (jawny, a gdy go nie było — pochodną starej nazwy)
             backup_dir=(old.backup_dir if new_name.strip() == old.name
                         else old.backup_dir or sanitize_name(old.name)),
