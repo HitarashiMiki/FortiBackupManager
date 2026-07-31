@@ -58,6 +58,7 @@ from .jobs import JOBS
 from .eventlog import EVENTLOG, LEVELS as EVENTLOG_LEVELS
 from .notifier import (NOTIFIER, load_email_config, save_email_config,
                        EmailConfig)
+from .version import VERSION_CHECKER, APP_VERSION
 from .scheduler import SCHEDULER
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -77,6 +78,8 @@ def _startup_tasks() -> None:
     SCHEDULER.start_once()
     NOTIFIER.start_once()
     EVENTLOG.subscribe(NOTIFIER.queue_event)
+    # sprawdzanie dostępności nowej wersji w tle
+    VERSION_CHECKER.start_once()
     # ślad restartu na osi czasu — widać, kiedy proces wstał
     EVENTLOG.log("info", "Aplikacja uruchomiona — harmonogram uśpiony.", "system")
 
@@ -1113,3 +1116,9 @@ def compare_versions(
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/version")
+def version_status():
+    """Stan wersji."""
+    return VERSION_CHECKER.status()
