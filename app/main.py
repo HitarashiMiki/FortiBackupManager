@@ -587,6 +587,7 @@ def add_device(
                 message += " " + attached
         except Exception:  # noqa: BLE001
             pass
+        EVENTLOG.log("info", f"Dodano urządzenie: {device.name} ({device.host})", "inwentarz")
         return {"status": "ok", "message": message}
 
 
@@ -681,9 +682,13 @@ def update_device(
         try:
             db.upsert(device, old_name=name)
             SCHEDULER.refresh()
-            return {"status": "ok", "message": "Urządzenie zaktualizowane"}
         except DeviceDBError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        if new_name.strip() != name:
+            EVENTLOG.log("info", f"Zmieniono nazwę urządzenia: {name} → {new_name.strip()}", "inwentarz")
+        else:
+            EVENTLOG.log("info", f"Zaktualizowano urządzenie: {new_name.strip()}", "inwentarz")
+        return {"status": "ok", "message": "Urządzenie zaktualizowane"}
 
 
 @app.delete("/api/devices/{name}")
@@ -693,6 +698,7 @@ def delete_device(name: str, mp: str = Depends(get_master_password)):
         db = _load_db(st, mp)
         db.remove(name)
         SCHEDULER.refresh()
+        EVENTLOG.log("info", f"Usunięto urządzenie: {name} z bazy", "inwentarz")
         return {"status": "ok", "message": f"Usunięto urządzenie: {name}"}
 
 
@@ -706,6 +712,7 @@ def move_device(name: str, folder: str = Form(""),
         except DeviceDBError as e:
             raise HTTPException(status_code=400, detail=str(e))
         target = folder.strip() or "poza foldery"
+        EVENTLOG.log("info", f"Przeniesiono urządzenie '{name}' → {target}", "inwentarz")
         return {"status": "ok", "message": f"Przeniesiono '{name}' → {target}"}
 
 
@@ -786,6 +793,7 @@ def add_folder(name: str = Form(...), color: str = Form(""),
             db.add_folder(name, color)
         except DeviceDBError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        EVENTLOG.log("info", f"Utworzono folder: {name.strip()}", "inwentarz")
         return {"status": "ok", "message": f"Utworzono folder: {name.strip()}"}
 
 
@@ -811,6 +819,7 @@ def delete_folder(name: str, mp: str = Depends(get_master_password)):
             moved = db.remove_folder(name)
         except DeviceDBError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        EVENTLOG.log("info", f"Usunięto folder '{name}' ({moved})", "inwentarz")
         return {"status": "ok",
                 "message": f"Usunięto folder '{name}' ({moved} urz. przeniesionych poza foldery)"}
 
@@ -1000,11 +1009,9 @@ def eventlog_recent(level: str = "", limit: int = 200,
     return {"events": EVENTLOG.recent(limit=limit, level=lvl)}
 
 
-@app.delete("/api/eventlog")
-def eventlog_clear(mp: str = Depends(get_master_password)):
-    EVENTLOG.clear()
-    EVENTLOG.log("info", "Globalny dziennik wyczyszczony przez użytkownika.", "system")
-    return {"status": "ok"}
+# CELOWO brak endpointu kasującego globalny dziennik. Plik events.jsonl jest
+# trwałym zapisem historii (backupy, retencja, zmiany inwentarza) i NIE może
+# dać się wyczyścić z UI/API
 
 
 # ======================== VERSIONS ========================

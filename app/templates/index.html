@@ -167,7 +167,7 @@
                             <option value="success">Sukcesy</option>
                             <option value="info">Info</option>
                         </select>
-                        <button onclick="clearActiveLog()" class="text-xs px-3 py-1 rounded hover:bg-[#21262d]">Wyczyść</button>
+                        <button id="clear-log-btn" onclick="clearActiveLog()" class="text-xs px-3 py-1 rounded hover:bg-[#21262d]">Wyczyść</button>
                     </div>
                 </div>
                 <div id="log-container" class="flex-1 overflow-auto p-3 text-xs bg-[#0d1117]"></div>
@@ -488,6 +488,13 @@
                 `text-xs px-3 py-1.5 rounded-t-lg border-b-2 ${isGlobal ? off : on}`;
             document.getElementById('tab-global').className =
                 `text-xs px-3 py-1.5 rounded-t-lg border-b-2 ${isGlobal ? on : off} hover:text-white`;
+            // przycisk: na karcie globalnej NIE kasuje (dziennik trwały) — tylko
+            // oznacza błędy jako przeczytane; na sesji czyści lokalny widok
+            const clearBtn = document.getElementById('clear-log-btn');
+            clearBtn.textContent = isGlobal ? 'Oznacz przeczytane' : 'Wyczyść';
+            clearBtn.title = isGlobal
+                ? 'Zeruje licznik błędów.'
+                : 'Czyści widok logu sesji.';
             if (isGlobal) {
                 loadGlobalLog();
                 // odświeżaj póki karta globalna jest aktywna
@@ -542,24 +549,41 @@
 
         function clearActiveLog() {
             if (activeLogTab === 'session') { clearLog(); return; }
-            if (!confirm('Wyczyścić GLOBALNY dziennik zdarzeń? Operacja jest trwała.')) return;
-            fetch('/api/eventlog', { method: 'DELETE' }).then(r => {
-                if (r.ok) { loadGlobalLog(); refreshGlobalErrorBadge(); addLog('Globalny dziennik wyczyszczony', 'success'); }
-                else addLog('Nie udało się wyczyścić globalnego dziennika', 'error');
-            });
+            // Globalny dziennik jest TRWAŁY — pliku NIE kasujemy. „Wyczyść" na
+            // tej karcie = oznacz widziane błędy jako przeczytane: badge znika,
+            // ale wpisy w dzienniku zostają.
+            markErrorsRead();
+            addLog('Błędy oznaczone jako przeczytane', 'success');
         }
 
-        // Licznik błędów przy karcie globalnej — sygnał "coś się nie wykonało"
-        // widoczny nawet gdy patrzysz na kartę sesyjną.
+        // Znacznik „przeczytane" trzymany per-przeglądarka (localStorage) — nie
+        // rusza danych na serwerze. Badge liczy tylko błędy nowsze niż ten czas.
+        function errorsAckTs() { return parseFloat(localStorage.getItem('fbk-errors-ack-ts') || '0'); }
+        function markErrorsRead() {
+            localStorage.setItem('fbk-errors-ack-ts', (Date.now() / 1000).toString());
+            refreshGlobalErrorBadge();
+        }
+
+        // Po zmianach inwentarza (dodanie/usunięcie/przeniesienie urządzenia,
+        // foldery) serwer dopisuje wpis do globalnego dziennika — odśwież widok
+        // globalny (jeśli aktywny) i badge, żeby zmiany były od razu widoczne.
+        function refreshLogViews() {
+            refreshGlobalErrorBadge();
+            if (activeLogTab === 'global') loadGlobalLog();
+        }
+
+        // Licznik NIEPRZECZYTANYCH błędów przy karcie globalnej — sygnał "coś
+        // się nie wykonało", widoczny nawet gdy patrzysz na kartę sesyjną.
         async function refreshGlobalErrorBadge() {
             try {
                 const res = await fetch('/api/eventlog?level=error&limit=100');
                 if (!res.ok) return;
                 const data = await res.json();
-                const n = (data.events || []).length;
+                const ack = errorsAckTs();
+                const unseen = (data.events || []).filter(e => (e.ts || 0) > ack);
                 const badge = document.getElementById('global-error-badge');
-                if (n > 0) {
-                    badge.textContent = n >= 100 ? '99+' : n;
+                if (unseen.length > 0) {
+                    badge.textContent = unseen.length >= 100 ? '99+' : unseen.length;
                     badge.classList.remove('hidden');
                 } else {
                     badge.classList.add('hidden');
@@ -1080,6 +1104,9 @@
                     return r.json();
                 })
                 .then(data => {
+                    // odśwież globalny dziennik/badge — wpisy o zmianach inwentarza
+                    // (dodanie/usunięcie/przeniesienie) mają być od razu widoczne
+                    refreshLogViews();
                     allFolders = data.folders || [];
                     folderColors = data.folder_colors || {};
                     folderPalette = data.palette || [];
