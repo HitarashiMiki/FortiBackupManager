@@ -37,6 +37,13 @@
         </div>
     </nav>
 
+    <!-- Baner: dostępna nowa wersja aplikacji (GitHub Releases) -->
+    <div id="update-banner" class="hidden bg-[#12361f] text-[#3fb950] border-b border-[#238636] px-6 py-3 text-sm flex-shrink-0 flex items-center justify-between">
+        <span><i class="fa-solid fa-rocket mr-2"></i><span id="update-banner-text"></span></span>
+        <a id="update-banner-link" href="#" target="_blank" rel="noopener"
+           class="underline hover:text-white flex-shrink-0 ml-4">Zobacz nową wersję ↗</a>
+    </div>
+
     <!-- Baner: -->
     <div id="db-version-banner" class="hidden bg-[#3c1618] text-[#ff7b72] border-b border-[#f8514933] px-6 py-3 text-sm flex-shrink-0">
         <i class="fa-solid fa-triangle-exclamation mr-2"></i>
@@ -1354,6 +1361,22 @@
             addLog(`Usunięto wersję: ${name}`);
         }
 
+        // Baner: dostępna nowa wersja aplikacji
+        async function checkAppVersion() {
+            try {
+                const res = await fetch('/api/version');
+                if (!res.ok) return;
+                const v = await res.json();
+                if (!v.update_available) return;
+                document.getElementById('update-banner-text').textContent =
+                    `Dostępna nowa wersja ${v.latest} (masz ${v.current}). ` +
+                    `Zaktualizuj: git pull && docker compose up -d --build`;
+                const link = document.getElementById('update-banner-link');
+                if (v.release_url) link.href = v.release_url;
+                document.getElementById('update-banner').classList.remove('hidden');
+            } catch (e) { /* brak sieci / wyłączone — bez banera */ }
+        }
+
         // Inicjalizacja
         window.onload = function() {
             addLog("Aplikacja uruchomiona");
@@ -1363,6 +1386,9 @@
             // (np. nocny backup) się nie wykonało, widoczny bez wchodzenia w kartę
             refreshGlobalErrorBadge();
             setInterval(refreshGlobalErrorBadge, 60000);
+            // sprawdź czy jest nowsza wersja (baner u góry), potem co 6 h
+            checkAppVersion();
+            setInterval(checkAppVersion, 6 * 3600 * 1000);
         }
     </script>
 </body>
