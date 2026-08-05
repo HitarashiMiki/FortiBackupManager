@@ -394,8 +394,21 @@ class LocalStorage(RemoteStorage):
         p = Path(path)
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_bytes(data)
+            tmp = p.with_name(p.name + ".tmp")
+            tmp.write_bytes(data)
+            for attempt in range(10):
+                try:
+                    os.replace(tmp, p)
+                    break
+                except PermissionError:
+                    if attempt == 9:
+                        raise
+                    time.sleep(0.02)
         except OSError as e:
+            try:
+                tmp.unlink()          # nie zostawiaj śmiecia po nieudanym zapisie
+            except OSError:
+                pass
             raise StorageError(f"Błąd zapisu {path}: {e}") from e
 
     def download_bytes(self, path: str) -> bytes:

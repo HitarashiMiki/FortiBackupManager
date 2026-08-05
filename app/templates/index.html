@@ -591,6 +591,41 @@
             } catch (e) { /* ignoruj */ }
         }
 
+        // ==================== SYNCHRONIZACJA MIĘDZY UŻYTKOWNIKAMI ====================
+
+        // Zamiast pollować drogie endpointy pytamy /api/state i dociągamy dane dopiero,
+        //  gdy coś się zmieniło.
+        const STATE_POLL_MS = 7000;
+        let lastLogSeq = null, lastDevicesRev = null;
+
+        async function pollState() {
+            let s;
+            try {
+                const res = await fetch('/api/state');
+                if (!res.ok) return;              // 401/5xx — cicho, następna próba za chwilę
+                s = await res.json();
+            } catch (e) { return; }
+
+            // pierwszy odczyt tylko zapamiętuje punkt odniesienia
+            if (lastDevicesRev === null) {
+                lastDevicesRev = s.devices_rev;
+                lastLogSeq = s.log_seq;
+                return;
+            }
+            // porównanie przez !== (a nie >), bo restart serwera zeruje liczniki
+            if (s.devices_rev !== lastDevicesRev) {
+                lastDevicesRev = s.devices_rev;
+                loadDevices();                    // zachowuje zaznaczenie (currentDevice)
+            }
+            if (s.log_seq !== lastLogSeq) {
+                lastLogSeq = s.log_seq;
+                refreshLogViews();                // badge błędów + karta globalna
+                // nowy wpis w dzienniku to zwykle czyjś backup — jeśli mamy
+                // otwarte urządzenie, tabela wersji może być już nieaktualna
+                if (currentDevice) loadVersions(currentDevice);
+            }
+        }
+
         // ==================== DEVICES ====================
         function fillFolderSelect(selectId, selected) {
             const sel = document.getElementById(selectId);
@@ -1413,6 +1448,9 @@
             // (np. nocny backup) się nie wykonało, widoczny bez wchodzenia w kartę
             refreshGlobalErrorBadge();
             setInterval(refreshGlobalErrorBadge, 60000);
+            // puls: zmiany zrobione przez innych użytkowników (patrz pollState)
+            pollState();
+            setInterval(pollState, STATE_POLL_MS);
             // sprawdź czy jest nowsza wersja (baner u góry), potem co 6 h
             checkAppVersion();
             setInterval(checkAppVersion, 6 * 3600 * 1000);
