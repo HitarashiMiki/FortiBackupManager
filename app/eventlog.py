@@ -43,6 +43,11 @@ class EventLog:
         self._loaded = False
         self._writes = 0
         self._subscribers: List[Callable[[dict], None]] = []
+        # Licznik zdarzeń od startu procesu. UI odpytuje go przez /api/state,
+        # żeby wiedzieć, że doszedł nowy wpis — bez pobierania całego dziennika co kilka sekund.
+        # Restart zeruje licznik, więc przeglądarka porównuje przez "różne od
+        # poprzedniego", a nie "większe".
+        self._seq = 0
 
     def subscribe(self, callback: Callable[[dict], None]) -> None:
         with self._lock:
@@ -107,6 +112,7 @@ class EventLog:
             over = len(self._buf) >= MAX_EVENTS   # deque wypchnie najstarszy
             self._buf.append(entry)
             self._writes += 1
+            self._seq += 1
             # rotacja: gdy bufor jest pełny (plik by rósł w nieskończoność)
             # albo co COMPACT_EVERY zapisów — przepisz plik z bufora
             if over or self._writes >= COMPACT_EVERY:
@@ -121,6 +127,12 @@ class EventLog:
             except Exception:  # noqa: BLE001
                 pass
 
+    @property
+    def seq(self) -> int:
+        """Numer ostatniego zdarzenia (od startu procesu) — puls dla UI."""
+        with self._lock:
+            return self._seq
+
     def recent(self, limit: int = 200, level: Optional[str] = None) -> List[dict]:
         with self._lock:
             self._ensure_loaded()
@@ -134,6 +146,7 @@ class EventLog:
         with self._lock:
             self._buf.clear()
             self._writes = 0
+            self._seq += 1        # UI ma zauważyć, że widok się zmienił
             self._loaded = True
             try:
                 if self._path.exists():

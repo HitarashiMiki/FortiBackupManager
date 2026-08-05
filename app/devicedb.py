@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, asdict, field
 from typing import Dict, List, Optional, Tuple
 
@@ -109,14 +112,59 @@ class Device:
         return Device(**kwargs)
 
 
+_KEY_CACHE: "OrderedDict[bytes, bytes]" = OrderedDict()
+_KEY_CACHE_LOCK = threading.Lock()
+KEY_CACHE_MAX = 16          # w praktyce 1-2 wpisy (jedno hasło, jedna sól)
+
+
 def _derive_key(password: str, salt: bytes) -> bytes:
+    ck = hashlib.sha256(b"fbk-kdf\0" + salt + password.encode("utf-8")).digest()
+    with _KEY_CACHE_LOCK:
+        key = _KEY_CACHE.get(ck)
+        if key is not None:
+            _KEY_CACHE.move_to_end(ck)
+            return key
+    # Poza lockiem: dwa wątki mogą policzyć to samo równolegle (nieszkodliwe),
+    # ale nikt nie czeka pod lockiem przez 100 ms.
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
         salt=salt,
         iterations=KDF_ITERATIONS,
     )
-    return base64.urlsafe_b64encode(kdf.derive(password.encode("utf-8")))
+    key = base64.urlsafe_b64encode(kdf.derive(password.encode("utf-8")))
+    with _KEY_CACHE_LOCK:
+        _KEY_CACHE[ck] = key
+        _KEY_CACHE.move_to_end(ck)
+        while len(_KEY_CACHE) > KEY_CACHE_MAX:
+            _KEY_CACHE.popitem(last=False)
+    return key
+
+
+def clear_key_cache() -> None:
+    """Czyści cache kluczy (wylogowanie wszystkich / testy)."""
+    with _KEY_CACHE_LOCK:
+        _KEY_CACHE.clear()
+
+
+
+DB_LOCK = threading.RLock()
+
+# Licznik zapisów bazy. UI odpytuje go przez /api/state, żeby wiedzieć, że
+# KTOŚ INNY zmienił inwentarz i trzeba przeładować listę urządzeń.
+_REVISION = 0
+_REVISION_LOCK = threading.Lock()
+
+
+def db_revision() -> int:
+    with _REVISION_LOCK:
+        return _REVISION
+
+
+def _bump_revision() -> None:
+    global _REVISION
+    with _REVISION_LOCK:
+        _REVISION += 1
 
 
 def encrypt_db(devices: List[Device], password: str, salt: Optional[bytes] = None,
@@ -205,119 +253,149 @@ class DeviceDB:
                                     "devices", "folders", "folder_colors")}
 
     def load_or_create(self) -> bool:
-        self.storage.ensure_dir(self.storage.cfg.base_path)
-        if self.storage.exists(self.remote_path):
-            blob = self.storage.download_bytes(self.remote_path)
-            self._ingest(blob)
-            self._salt = blob[len(MAGIC):len(MAGIC) + SALT_LEN]
-            return True
-        self.devices = []
-        self.folders = []
-        self.save()
-        return False
+        # Odczyt też pod DB_LOCK: inaczej można trafić na moment podmiany pliku
+        # przez cudzy zapis i zobaczyć stan "w połowie" (albo — na Windows —
+        # zablokować tę podmianę otwartym uchwytem).
+        with DB_LOCK:
+            self.storage.ensure_dir(self.storage.cfg.base_path)
+            if self.storage.exists(self.remote_path):
+                blob = self.storage.download_bytes(self.remote_path)
+                self._ingest(blob)
+                self._salt = blob[len(MAGIC):len(MAGIC) + SALT_LEN]
+                return True
+            self.devices = []
+            self.folders = []
+            self.save()
+            return False
 
     def save(self) -> None:
-        blob = encrypt_db(self.devices, self.password, self._salt,
-                          folders=self.folders, folder_colors=self.folder_colors,
-                          extra=self._extra)
-        if self._salt is None:
-            self._salt = blob[len(MAGIC):len(MAGIC) + SALT_LEN]
-        self.storage.upload_bytes(blob, self.remote_path)
+        with DB_LOCK:
+            blob = encrypt_db(self.devices, self.password, self._salt,
+                              folders=self.folders, folder_colors=self.folder_colors,
+                              extra=self._extra)
+            if self._salt is None:
+                self._salt = blob[len(MAGIC):len(MAGIC) + SALT_LEN]
+            self.storage.upload_bytes(blob, self.remote_path)
+            _bump_revision()
 
     def reload(self) -> None:
-        if self.storage.exists(self.remote_path):
-            blob = self.storage.download_bytes(self.remote_path)
-            self._ingest(blob)
+        with DB_LOCK:
+            if self.storage.exists(self.remote_path):
+                blob = self.storage.download_bytes(self.remote_path)
+                self._ingest(blob)
 
     def get(self, name: str) -> Optional[Device]:
         return next((d for d in self.devices if d.name == name), None)
 
     def upsert(self, device: Device, old_name: Optional[str] = None) -> None:
-        try:
-            self.reload()
-        except StorageError:
-            pass
-        key = old_name or device.name
-        for i, d in enumerate(self.devices):
-            if d.name == key:
-                self.devices[i] = device
-                break
-        else:
-            if self.get(device.name):
+        with DB_LOCK:
+            try:
+                self.reload()
+            except StorageError:
+                pass
+            key = old_name or device.name
+            # Zmiana nazwy nie tworzy dwóch urządzeń o tej samej nazwie. Nazwa jest unikalnym kluczem.
+            if device.name != key and any(d.name == device.name for d in self.devices):
                 raise DeviceDBError(f"Urządzenie o nazwie '{device.name}' już istnieje.")
-            self.devices.append(device)
-        self.devices.sort(key=lambda d: d.name.lower())
-        self.save()
+            for i, d in enumerate(self.devices):
+                if d.name == key:
+                    self.devices[i] = device
+                    break
+            else:
+                if self.get(device.name):
+                    raise DeviceDBError(f"Urządzenie o nazwie '{device.name}' już istnieje.")
+                self.devices.append(device)
+            self.devices.sort(key=lambda d: d.name.lower())
+            self.save()
 
     def remove(self, name: str) -> None:
-        try:
-            self.reload()
-        except StorageError:
-            pass
-        self.devices = [d for d in self.devices if d.name != name]
-        self.save()
+        with DB_LOCK:
+            try:
+                self.reload()
+            except StorageError:
+                pass
+            self.devices = [d for d in self.devices if d.name != name]
+            self.save()
 
     # -- foldery ---------------------------------------------------------------
 
     def add_folder(self, name: str, color: str = "") -> None:
-        try:
-            self.reload()
-        except StorageError:
-            pass
-        name = name.strip()
-        if not name:
-            raise DeviceDBError("Nazwa folderu nie może być pusta.")
-        if any(f.lower() == name.lower() for f in self.folders):
-            raise DeviceDBError(f"Folder '{name}' już istnieje.")
-        self.folders.append(name)
-        self.folders.sort(key=str.lower)
-        color = normalize_folder_color(color)
-        if color:
-            self.folder_colors[name] = color
-        self.save()
+        with DB_LOCK:
+            try:
+                self.reload()
+            except StorageError:
+                pass
+            name = name.strip()
+            if not name:
+                raise DeviceDBError("Nazwa folderu nie może być pusta.")
+            if any(f.lower() == name.lower() for f in self.folders):
+                raise DeviceDBError(f"Folder '{name}' już istnieje.")
+            self.folders.append(name)
+            self.folders.sort(key=str.lower)
+            color = normalize_folder_color(color)
+            if color:
+                self.folder_colors[name] = color
+            self.save()
 
     def set_folder_color(self, name: str, color: str) -> None:
-        try:
-            self.reload()
-        except StorageError:
-            pass
-        if name not in self.folders:
-            raise DeviceDBError(f"Folder '{name}' nie istnieje.")
-        color = normalize_folder_color(color)
-        if color:
-            self.folder_colors[name] = color
-        else:
-            self.folder_colors.pop(name, None)   # pusty = kolor domyślny
-        self.save()
+        with DB_LOCK:
+            try:
+                self.reload()
+            except StorageError:
+                pass
+            if name not in self.folders:
+                raise DeviceDBError(f"Folder '{name}' nie istnieje.")
+            color = normalize_folder_color(color)
+            if color:
+                self.folder_colors[name] = color
+            else:
+                self.folder_colors.pop(name, None)   # pusty = kolor domyślny
+            self.save()
 
     def remove_folder(self, name: str) -> int:
         """Usuwa folder; Urządzenia są przenoszone poza folder"""
-        try:
-            self.reload()
-        except StorageError:
-            pass
-        if name not in self.folders:
-            raise DeviceDBError(f"Folder '{name}' nie istnieje.")
-        moved = 0
-        for d in self.devices:
-            if d.folder == name:
-                d.folder = ""
-                moved += 1
-        self.folders = [f for f in self.folders if f != name]
-        self.folder_colors.pop(name, None)
-        self.save()
-        return moved
+        with DB_LOCK:
+            try:
+                self.reload()
+            except StorageError:
+                pass
+            if name not in self.folders:
+                raise DeviceDBError(f"Folder '{name}' nie istnieje.")
+            moved = 0
+            for d in self.devices:
+                if d.folder == name:
+                    d.folder = ""
+                    moved += 1
+            self.folders = [f for f in self.folders if f != name]
+            self.folder_colors.pop(name, None)
+            self.save()
+            return moved
 
     def move_device(self, name: str, folder: str) -> None:
-        try:
-            self.reload()
-        except StorageError:
-            pass
-        device = self.get(name)
-        if not device:
-            raise DeviceDBError(f"Urządzenie '{name}' nie istnieje.")
-        folder = folder.strip()
-        if folder and folder not in self.folders:
-            raise DeviceDBError(f"Folder '{folder}' nie istnieje.")
-        device.folder = folder
-        self.save()
+        with DB_LOCK:
+            try:
+                self.reload()
+            except StorageError:
+                pass
+            device = self.get(name)
+            if not device:
+                raise DeviceDBError(f"Urządzenie '{name}' nie istnieje.")
+            folder = folder.strip()
+            if folder and folder not in self.folders:
+                raise DeviceDBError(f"Folder '{folder}' nie istnieje.")
+            device.folder = folder
+            self.save()
+
+    def mutate(self, fn):
+        """Wykonuje dowolną zmianę pod DB_LOCK na ŚWIEŻO wczytanej bazie.
+
+        Dla endpointów, które nie mieszczą się w gotowych metodach wyżej
+        (np. retencja: znajdź urządzenie → zmień pola → zapisz). `fn` dostaje
+        `self` i musi sam wywołać `save()`. Bez tego endpoint budowałby zmianę
+        na stanie sprzed cudzego zapisu."""
+        with DB_LOCK:
+            try:
+                self.reload()
+            except StorageError:
+                pass
+            return fn(self)

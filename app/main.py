@@ -46,7 +46,7 @@ from starlette.status import HTTP_302_FOUND, HTTP_401_UNAUTHORIZED
 from .config import load_settings, save_settings, AppSettings, _obf
 from .storage import open_storage, open_db_storage, StorageConfig, StorageError
 from .devicedb import (DeviceDB, Device, WrongPasswordError, DeviceDBError,
-                       DBTooNewError, DB_FILENAME, FOLDER_COLORS)
+                       DBTooNewError, DB_FILENAME, FOLDER_COLORS, db_revision)
 from .fortigate import run_backup, device_backup_dir, sanitize_name, BACKUP_DIR
 from .diff import make_diff_html
 from .changes import changed_flags, detect_and_log, find_backup_dir_for_host
@@ -572,8 +572,18 @@ def add_device(
             sched_every_hours=sched_every_hours, sched_time=sched_time.strip(),
             sched_weekday=sched_weekday,
         )
+        # DODANIE musi odrzucić istniejącą nazwę.
+        def _insert(d: DeviceDB):
+            if d.get(device.name):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Urządzenie o nazwie '{device.name}' już istnieje.")
+            d.devices.append(device)
+            d.devices.sort(key=lambda x: x.name.lower())
+            d.save()
+
         try:
-            db.upsert(device)
+            db.mutate(_insert)
         except DeviceDBError as e:
             raise HTTPException(status_code=400, detail=str(e))
         SCHEDULER.refresh()
@@ -733,17 +743,24 @@ def save_retention(
         raise HTTPException(status_code=400, detail="Nieznany tryb retencji.")
     with open_db_storage() as st:
         db = _load_db(st, mp)
-        device = db.get(name)
-        if not device:
-            raise HTTPException(status_code=404, detail="Urządzenie nie istnieje")
-        # liczniki nieujemne; count/gfs-daily min. 1, by nie skasować wszystkiego
-        device.retention_mode = retention_mode
-        device.retention_count = max(1, retention_count)
-        device.retention_days = max(1, retention_days)
-        device.gfs_daily = max(0, gfs_daily)
-        device.gfs_weekly = max(0, gfs_weekly)
-        device.gfs_monthly = max(0, gfs_monthly)
-        db.upsert(device, old_name=name)
+
+        # Zmiana kilku pól ISTNIEJĄCEGO urządzenia musi iść na świeżym stanie
+        # pod lockiem — inaczej zapis retencji cofnąłby edycję urządzenia,
+        # którą ktoś inny zrobił sekundę wcześniej
+        def _apply(d: DeviceDB):
+            device = d.get(name)
+            if not device:
+                raise HTTPException(status_code=404, detail="Urządzenie nie istnieje")
+            # liczniki nieujemne; count/gfs-daily min. 1, by nie skasować wszystkiego
+            device.retention_mode = retention_mode
+            device.retention_count = max(1, retention_count)
+            device.retention_days = max(1, retention_days)
+            device.gfs_daily = max(0, gfs_daily)
+            device.gfs_weekly = max(0, gfs_weekly)
+            device.gfs_monthly = max(0, gfs_monthly)
+            d.save()
+
+        db.mutate(_apply)
         return {"status": "ok", "message": "Zapisano ustawienia retencji."}
 
 
@@ -1012,6 +1029,15 @@ def eventlog_recent(level: str = "", limit: int = 200,
 # CELOWO brak endpointu kasującego globalny dziennik. Plik events.jsonl jest
 # trwałym zapisem historii (backupy, retencja, zmiany inwentarza) i NIE może
 # dać się wyczyścić z UI/API
+
+
+# ======================== SYNCHRONIZACJA MIĘDZY UŻYTKOWNIKAMI ========================
+
+@app.get("/api/state")
+def app_state(mp: str = Depends(get_master_password)):
+    """Lekki "puls" dla przeglądarek.
+    """
+    return {"devices_rev": db_revision(), "log_seq": EVENTLOG.seq}
 
 
 # ======================== VERSIONS ========================
