@@ -8,10 +8,18 @@ from datetime import datetime
 from typing import Callable, Optional
 
 from .devicedb import Device
+from .security import register_secret, SECRET_MASK
 from .storage import RemoteStorage, StorageConfig
 
 BACKUP_DIR = "backups"
 TS_FORMAT = "%Y%m%d_%H%M%S"
+
+
+BACKUP_ATTEMPTS = 3
+BACKUP_RETRY_DELAY = 8
+
+# Ile znaków wyjścia z urządzenia pokazujemy w błędzie.
+ERROR_TAIL_CHARS = 2000
 
 Logger = Callable[[str], None]
 
@@ -42,10 +50,28 @@ def device_backup_dir(storage: RemoteStorage, device: Device) -> str:
 
 # ======================== SSH PUSH ========================
 
+def redact(text: str, secrets) -> str:
+    """Zamazuje sekrety w tekście przychodzącym z urządzenia.
+
+    FortiGate ODBIJA w konsoli całą wpisaną komendę, a `execute backup config
+    sftp` z definicji zawiera login i hasło do magazynu. Bez tego wyjście
+    z urządzenia (a przez nie treść błędu) wynosiło hasło do dziennika,
+    do loga joba i do maila z powiadomieniem."""
+    for s in secrets:
+        if s and len(s) >= 4:
+            text = text.replace(s, SECRET_MASK)
+    return text
+
+
 class _FortiShell:
-    def __init__(self, device: Device, logger: Optional[Logger] = None):
+    def __init__(self, device: Device, logger: Optional[Logger] = None,
+                 secrets=()):
         self.device = device
         self.logger = logger
+        # Zamazywane u ŹRÓDŁA — w miejscu, gdzie surowe bajty z urządzenia
+        # zamieniają się w string oddawany dalej. Dzięki temu nie ma znaczenia,
+        # kto i gdzie potem ten tekst zaloguje.
+        self.secrets = tuple(secrets)
         self.client = None
         self.chan = None
 
@@ -109,21 +135,57 @@ class _FortiShell:
                     buf = buf.replace("--More--", "").replace("--more--", "")
                     continue
                 if self._looks_like_prompt(buf):
-                    return buf
+                    return redact(buf, self.secrets)
             else:
                 if not nudged and time.time() - last_activity > 3:
                     self.chan.send("\n")
                     nudged = True
                     last_activity = time.time()
                 time.sleep(0.1)
-        tail = "\n".join(buf.strip().splitlines()[-5:]) if buf.strip() else "(brak danych)"
-        raise FortiGateError(f"SSH timeout.\nOstatnie dane:\n{tail}")
+        tail = "\n".join(buf.strip().splitlines()[-10:]) if buf.strip() else "(brak danych)"
+        raise FortiGateError("SSH timeout.\nOstatnie dane:\n" + redact(tail, self.secrets))
 
     def cmd(self, command: str, timeout: float = 60) -> str:
         _log(self.logger, f"  > {command.split()[0]} ...")
         self.chan.send(command + "\n")
         out = self._read_until_prompt(timeout=timeout)
         return out
+
+
+# Błędy, których nie ma sensu (albo nie wolno) powtarzać: powtórka nic nie da,
+# a przy złym haśle grozi zablokowaniem konta na urządzeniu.
+_PERMANENT_ERROR_MARKERS = (
+    "authentication", "uwierzytelni", "permission denied",
+    "wymaga magazynu", "wymaga tokenu",
+)
+
+
+def _is_permanent(err: Exception) -> bool:
+    low = str(err).lower()
+    return any(m in low for m in _PERMANENT_ERROR_MARKERS)
+
+
+def _ssh_push_once(device: Device, storage: RemoteStorage, command: str,
+                   remote_path: str, logger: Optional[Logger]) -> None:
+    """Jedna próba: SSH → execute backup → sprawdzenie odpowiedzi urządzenia."""
+    shell = _FortiShell(device, logger, secrets=_backup_secrets(device, storage.cfg))
+    try:
+        shell.open()
+        _log(logger, f"[{device.name}] Połączono po SSH.")
+        if device.vdom_enabled:
+            shell.cmd("config global", timeout=15)
+        out = shell.cmd(command, timeout=180)
+        low = out.lower()
+        if "fail" in low or "error" in low or "invalid" in low:
+            # `out` jest już po redakcji (patrz _FortiShell.secrets)
+            raise FortiGateError(f"FortiGate zgłosił błąd:\n{out[-ERROR_TAIL_CHARS:].strip()}")
+        _log(logger, f"[{device.name}] Urządzenie potwierdziło backup.")
+    finally:
+        shell.close()
+
+
+def _backup_secrets(device: Device, cfg: StorageConfig):
+    return (cfg.password, device.password, device.api_token)
 
 
 def backup_ssh_push(device: Device, storage: RemoteStorage, logger: Optional[Logger] = None) -> str:
@@ -141,19 +203,22 @@ def backup_ssh_push(device: Device, storage: RemoteStorage, logger: Optional[Log
     server = cfg.host if _default_port(proto, cfg.port) else f"{cfg.host}:{cfg.port}"
     command = f'execute backup config {proto} "{remote_path}" {server} "{cfg.username}" "{cfg.password}"'
 
-    shell = _FortiShell(device, logger)
-    try:
-        shell.open()
-        _log(logger, f"[{device.name}] Połączono po SSH.")
-        if device.vdom_enabled:
-            shell.cmd("config global", timeout=15)
-        out = shell.cmd(command, timeout=180)
-        low = out.lower()
-        if "fail" in low or "error" in low or "invalid" in low:
-            raise FortiGateError(f"FortiGate zgłosił błąd:\n{out[-500:]}")
-        _log(logger, f"[{device.name}] Urządzenie potwierdziło backup.")
-    finally:
-        shell.close()
+
+    for attempt in range(1, BACKUP_ATTEMPTS + 1):
+        try:
+            _ssh_push_once(device, storage, command, remote_path, logger)
+            break
+        except FortiGateError as e:
+            # Urządzenie mogło zgłosić błąd, a plik i tak doleciał (np. zerwana
+            # sesja SSH po wysłaniu configu) — sprawdzamy, zanim powtórzymy.
+            if storage.exists(remote_path):
+                _log(logger, f"[{device.name}] Urządzenie zgłosiło błąd, ale plik jest na magazynie.")
+                return remote_path
+            if _is_permanent(e) or attempt == BACKUP_ATTEMPTS:
+                raise
+            _log(logger, f"[{device.name}] Próba {attempt}/{BACKUP_ATTEMPTS} nieudana: {e}")
+            _log(logger, f"[{device.name}] Powtarzam za {BACKUP_RETRY_DELAY} s...")
+            time.sleep(BACKUP_RETRY_DELAY)
 
     for _ in range(10):
         if storage.exists(remote_path):
@@ -214,6 +279,11 @@ def backup_api_pull(device: Device, storage: RemoteStorage, logger: Optional[Log
 
 
 def run_backup(device: Device, storage: RemoteStorage, logger: Optional[Logger] = None) -> str:
+    # Zgłoś sekrety tego urządzenia do wycierania z logów (dziennik, job, mail).
+    # Redakcja u źródła jest w _FortiShell — to jest siatka pod nią.
+    register_secret(device.password)
+    register_secret(device.api_token)
+    register_secret(storage.cfg.password)
     if device.method == "api_pull":
         return backup_api_pull(device, storage, logger)
     return backup_ssh_push(device, storage, logger)

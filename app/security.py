@@ -16,6 +16,10 @@ security.py — bezpieczeństwo aplikacji webowej.
 
 4. Walidacja ścieżek z URL-i — endpointy plikowe mogą dotykać wyłącznie
    katalogu backups/ pod base_path (żadnych "..", żadnego devices.db).
+
+5. Rejestr sekretów + usuwanie ich z logów. Ostatnia linia obrony: żaden
+   komunikat trafiający do dziennika, joba czy maila nie ma prawa zawierać
+   hasła.
 """
 
 from __future__ import annotations
@@ -131,6 +135,48 @@ class LoginRateLimiter:
 
 
 LOGIN_LIMITER = LoginRateLimiter()
+
+
+# --------------------------------------------------------------------------- #
+#  Rejestr sekretów — usuwanie haseł z logów
+# --------------------------------------------------------------------------- #
+
+# Hasła, które aplikacja gdzieś podaje dalej (magazyn, konta SSH urządzeń,
+# tokeny API).
+_SECRETS: set = set()
+_SECRETS_LOCK = threading.Lock()
+
+# Krótkie ciągi ("22", "abc") wycieralibyśmy z połowy komunikatów, robiąc
+# z logów sieczkę. Poniżej tej długości sekretu nie rejestrujemy.
+MIN_SECRET_LEN = 5
+SECRET_MASK = "***"
+
+
+def register_secret(value: Optional[str]) -> None:
+    """Zgłasza hasło/token do usuwania z logów."""
+    if not value or len(value) < MIN_SECRET_LEN:
+        return
+    with _SECRETS_LOCK:
+        _SECRETS.add(value)
+
+
+def scrub_secrets(text: str) -> str:
+    """Usuwa zarejestrowane sekrety. Uruchamiane przy KAŻDYM wpisie do dziennika
+    i loga joba — świadomie na końcu łańcucha."""
+    if not text:
+        return text
+    with _SECRETS_LOCK:
+        secrets_snapshot = tuple(_SECRETS)
+    for s in secrets_snapshot:
+        if s in text:
+            text = text.replace(s, SECRET_MASK)
+    return text
+
+
+def clear_secrets() -> None:
+    """Czyści rejestr (wylogowanie wszystkich / testy)."""
+    with _SECRETS_LOCK:
+        _SECRETS.clear()
 
 
 # --------------------------------------------------------------------------- #

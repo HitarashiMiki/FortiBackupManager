@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
 
+from .security import register_secret
+
 CONNECT_TIMEOUT = 15  # sekundy (TCP + banner)
 AUTH_TIMEOUT = 30     # sekundy (uwierzytelnianie bywa wolniejsze)
 
@@ -452,6 +454,9 @@ def open_db_storage() -> "LocalStorage":
 
 def open_storage(cfg: StorageConfig) -> RemoteStorage:
     """Fabryka: zwraca odpowiedni backend wg konfiguracji."""
+    # Jedno miejsce, przez które przechodzi każde użycie magazynu — dobre na
+    # zgłoszenie hasła do wycierania z logów (patrz security.scrub_secrets).
+    register_secret(cfg.password)
     if cfg.protocol == "sftp":
         return SFTPStorage(cfg)
     if cfg.protocol in ("ftp", "ftps"):

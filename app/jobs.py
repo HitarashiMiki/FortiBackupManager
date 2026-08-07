@@ -16,6 +16,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from .security import scrub_secrets
+
 MAX_JOBS_KEPT = 200
 
 
@@ -60,8 +62,10 @@ class JobRegistry:
             return self._jobs.get(job_id)
 
     def log(self, job: Job, msg: str) -> None:
+        # scrub_secrets: log joba leci prosto do przeglądarki (panel „Sesja"),
+        # więc obowiązuje ta sama zasada co w dzienniku — zero haseł.
         with self._lock:
-            job.log.append(f"[{time.strftime('%H:%M:%S')}] {msg}")
+            job.log.append(f"[{time.strftime('%H:%M:%S')}] {scrub_secrets(msg)}")
 
     def finish(self, job: Job, ok: bool) -> None:
         with self._lock:
