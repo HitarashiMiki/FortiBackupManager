@@ -27,6 +27,8 @@ from collections import deque
 from pathlib import Path
 from typing import Callable, Deque, List, Optional
 
+from .security import scrub_secrets
+
 MAX_EVENTS = 2000            # ile ostatnich wpisów trzymamy (RAM + plik)
 COMPACT_EVERY = 100         # co ile zapisów przepisujemy plik (rotacja)
 LEVELS = ("info", "success", "warning", "error")
@@ -101,7 +103,7 @@ class EventLog:
             "ts": time.time(),
             "level": level if level in LEVELS else "info",
             "source": source,
-            "message": message,
+            "message": scrub_secrets(message),
         }
         if extra:
             # ustrukturyzowane dane liczbowe (np. ile kopii usunęła retencja),
