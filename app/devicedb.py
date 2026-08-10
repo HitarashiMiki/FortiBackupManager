@@ -236,7 +236,7 @@ class DeviceDB:
         self._salt: Optional[bytes] = None
 
     @property
-    def db_path(self) -> str:
+    def remote_path(self) -> str:
         return self.storage.join(DB_FILENAME)
 
     def _ingest(self, blob: bytes) -> None:
