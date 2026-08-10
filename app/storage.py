@@ -21,12 +21,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
 
+from .security import register_secret
+
 CONNECT_TIMEOUT = 15  # sekundy (TCP + banner)
 AUTH_TIMEOUT = 30     # sekundy (uwierzytelnianie bywa wolniejsze)
 
 
 class StorageError(Exception):
-    """Błąd komunikacji ze zdalnym magazynem."""
+    """Błąd komunikacji z magazynem."""
 
 
 @dataclass
@@ -51,7 +53,7 @@ class StorageConfig:
 
 
 # --------------------------------------------------------------------------- #
-#  Interfejs
+#  Interface
 # --------------------------------------------------------------------------- #
 
 class RemoteStorage:
@@ -64,10 +66,12 @@ class RemoteStorage:
     def close(self) -> None: ...
     def ensure_dir(self, path: str) -> None: ...
     def list_files(self, path: str) -> List[RemoteFile]: ...
+    def list_dirs(self, path: str) -> List[str]: ...
     def upload_bytes(self, data: bytes, path: str) -> None: ...
     def download_bytes(self, path: str) -> bytes: ...
     def delete(self, path: str) -> None: ...
     def exists(self, path: str) -> bool: ...
+    def rename(self, src: str, dst: str) -> None: ...
 
     def join(self, *parts: str) -> str:
         return posixpath.join(self.cfg.base_path, *parts)
@@ -95,8 +99,6 @@ class SFTPStorage(RemoteStorage):
         last_err = None
         for attempt in (1, 2):
             try:
-                # Własny socket z timeoutem — bez tego nieodpowiadający serwer
-                # potrafi zawiesić połączenie na bardzo długo.
                 sock = socket.create_connection(
                     (self.cfg.host, self.cfg.port), timeout=CONNECT_TIMEOUT)
                 self._transport = paramiko.Transport(sock)
@@ -112,8 +114,7 @@ class SFTPStorage(RemoteStorage):
                 return
             except paramiko.AuthenticationException as e:
                 self.close()
-                # "Authentication timeout" = serwer nie zdążył odpowiedzieć —
-                # warto ponowić; błędne hasło ponawiamy też raz (nieszkodliwe)
+                # "Authentication timeout" = serwer nie zdążył odpowiedzieć
                 last_err = StorageError(
                     f"SFTP {self.cfg.host}:{self.cfg.port} — uwierzytelnianie: {e}")
             except (paramiko.SSHException, socket.error, OSError) as e:
@@ -149,8 +150,6 @@ class SFTPStorage(RemoteStorage):
                 except OSError as e:
                     raise StorageError(
                         f"Nie można utworzyć katalogu {cur}: {e}\n"
-                        "(przy chroot-owanym SFTP korzeń bywa tylko do odczytu — "
-                        "ustaw katalog bazowy wewnątrz zapisywalnego podkatalogu)"
                     ) from e
 
     def list_files(self, path: str) -> List[RemoteFile]:
@@ -169,6 +168,13 @@ class SFTPStorage(RemoteStorage):
                 mtime=datetime.fromtimestamp(a.st_mtime) if a.st_mtime else None,
             ))
         return out
+
+    def list_dirs(self, path: str) -> List[str]:
+        try:
+            entries = self._sftp.listdir_attr(path)
+        except FileNotFoundError:
+            return []
+        return [a.filename for a in entries if stat.S_ISDIR(a.st_mode or 0)]
 
     def upload_bytes(self, data: bytes, path: str) -> None:
         self.ensure_dir(posixpath.dirname(path))
@@ -199,6 +205,17 @@ class SFTPStorage(RemoteStorage):
             return True
         except FileNotFoundError:
             return False
+
+    def rename(self, src: str, dst: str) -> None:
+        try:
+            # posix_rename nadpisuje cel; zwykłe rename po SFTP potrafi
+            # odmówić, gdy plik docelowy istnieje
+            try:
+                self._sftp.posix_rename(src, dst)
+            except (AttributeError, IOError):
+                self._sftp.rename(src, dst)
+        except OSError as e:
+            raise StorageError(f"Nie można zmienić nazwy {src} → {dst}: {e}") from e
 
 
 # --------------------------------------------------------------------------- #
@@ -244,7 +261,6 @@ class FTPStorage(RemoteStorage):
             try:
                 self._ftp.mkd(cur)
             except ftplib.error_perm as e:
-                # 550 = już istnieje / brak uprawnień — "istnieje" ignorujemy
                 if not str(e).startswith("550"):
                     raise StorageError(f"Błąd tworzenia katalogu {cur}: {e}") from e
 
@@ -272,7 +288,6 @@ class FTPStorage(RemoteStorage):
                 return []
         except ftplib.all_errors:
             pass
-        # Fallback: NLST (bez metadanych)
         try:
             for name in self._ftp.nlst(path):
                 base = posixpath.basename(name)
@@ -286,6 +301,31 @@ class FTPStorage(RemoteStorage):
             if str(e).startswith("550"):
                 return []
             raise StorageError(f"Błąd listowania {path}: {e}") from e
+        return out
+
+    def list_dirs(self, path: str) -> List[str]:
+        # preferuj MLSD (jednoznaczny typ wpisu); fallback: NLST + próba CWD
+        try:
+            return [name for name, facts in self._ftp.mlsd(path)
+                    if facts.get("type") == "dir" and name not in (".", "..")]
+        except ftplib.all_errors:
+            pass
+        out: List[str] = []
+        try:
+            names = self._ftp.nlst(path)
+        except ftplib.all_errors:
+            return []
+        cur = self._ftp.pwd()
+        for name in names:
+            base = posixpath.basename(name.rstrip("/"))
+            if base in (".", ".."):
+                continue
+            try:
+                self._ftp.cwd(posixpath.join(path, base))
+                out.append(base)
+                self._ftp.cwd(cur)
+            except ftplib.all_errors:
+                continue  # plik, nie katalog
         return out
 
     def upload_bytes(self, data: bytes, path: str) -> None:
@@ -318,15 +358,21 @@ class FTPStorage(RemoteStorage):
         except ftplib.all_errors:
             return False
 
+    def rename(self, src: str, dst: str) -> None:
+        try:
+            self._ftp.rename(src, dst)
+        except ftplib.all_errors as e:
+            raise StorageError(f"Nie można zmienić nazwy {src} → {dst}: {e}") from e
+
 
 # --------------------------------------------------------------------------- #
-#  Lokalny dysk (używany opcjonalnie dla bazy urządzeń)
+#  Local storage (for devices.db)
 # --------------------------------------------------------------------------- #
 
 class LocalStorage(RemoteStorage):
     """Magazyn na lokalnym dysku. Backupy ZAWSZE lądują na zdalnym FTP/SFTP —
     ten backend służy wyłącznie do opcjonalnego trzymania bazy urządzeń
-    lokalnie (baza pozostaje zaszyfrowana hasłem głównym)."""
+    lokalnie."""
 
     def connect(self) -> None:
         from pathlib import Path
@@ -356,13 +402,33 @@ class LocalStorage(RemoteStorage):
                     mtime=datetime.fromtimestamp(st.st_mtime)))
         return out
 
+    def list_dirs(self, path: str) -> List[str]:
+        from pathlib import Path
+        p = Path(path)
+        if not p.is_dir():
+            return []
+        return [f.name for f in p.iterdir() if f.is_dir()]
+
     def upload_bytes(self, data: bytes, path: str) -> None:
         from pathlib import Path
         p = Path(path)
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_bytes(data)
+            tmp = p.with_name(p.name + ".tmp")
+            tmp.write_bytes(data)
+            for attempt in range(10):
+                try:
+                    os.replace(tmp, p)
+                    break
+                except PermissionError:
+                    if attempt == 9:
+                        raise
+                    time.sleep(0.02)
         except OSError as e:
+            try:
+                tmp.unlink()          # nie zostawiaj śmiecia po nieudanym zapisie
+            except OSError:
+                pass
             raise StorageError(f"Błąd zapisu {path}: {e}") from e
 
     def download_bytes(self, path: str) -> bytes:
@@ -386,6 +452,12 @@ class LocalStorage(RemoteStorage):
         from pathlib import Path
         return Path(path).is_file()
 
+    def rename(self, src: str, dst: str) -> None:
+        try:
+            os.replace(src, dst)
+        except OSError as e:
+            raise StorageError(f"Nie można zmienić nazwy {src} → {dst}: {e}") from e
+
 
 # Stałe miejsce bazy urządzeń w kontenerze — docker-compose montuje tu
 # katalog z hosta (np. ./db:/DB). Env FORTIBACKUP_DB_DIR pozwala nadpisać
@@ -401,10 +473,14 @@ def open_db_storage() -> "LocalStorage":
     return LocalStorage(StorageConfig(protocol="local", base_path=base))
 
 
+
 # --------------------------------------------------------------------------- #
 
 def open_storage(cfg: StorageConfig) -> RemoteStorage:
     """Fabryka: zwraca odpowiedni backend wg konfiguracji."""
+    # Jedno miejsce, przez które przechodzi każde użycie magazynu — dobre na
+    # zgłoszenie hasła do wycierania z logów (patrz security.scrub_secrets).
+    register_secret(cfg.password)
     if cfg.protocol == "sftp":
         return SFTPStorage(cfg)
     if cfg.protocol in ("ftp", "ftps"):

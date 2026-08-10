@@ -30,11 +30,21 @@ from typing import Dict, List, Optional, Tuple
 from .config import load_settings
 from .storage import open_storage, open_db_storage
 from .devicedb import DeviceDB, Device
-from .fortigate import run_backup
+from .fortigate import run_backup, device_backup_dir
+from .changes import detect_and_log, collapse_unchanged
+from .retention import apply_retention
 from .jobs import JOBS
+from .eventlog import EVENTLOG
 
 TICK_SECONDS = 20            # co ile budzi się pętla
 RELOAD_SECONDS = 300         # co ile odświeżana jest baza urządzeń
+# Po tylu sekundach od restartu BEZ jakiegokolwiek logowania wrzucamy czerwone
+# przypomnienie do dziennika: harmonogram śpi. Domyślnie 1 doba.
+IDLE_WARN_SECONDS = 24 * 3600
+# Cykliczny przegląd retencji całej floty — siatka bezpieczeństwa dla trybu
+# "days" i urządzeń, które chwilowo nie backupują (retencja leci też po każdym
+# backupie, ale to nie przycina kopii, gdy backupów brak). Domyślnie raz/dobę.
+RETENTION_SWEEP_SECONDS = 24 * 3600
 
 
 def compute_next_run(dev: Device, now: datetime) -> Optional[datetime]:
@@ -78,6 +88,9 @@ class Scheduler:
         self._sigs: Dict[str, Tuple] = {}
         self._reload_due = 0.0
         self._last_error: Optional[str] = None
+        self._started_at: Optional[float] = None   # start procesu (do idle-warn)
+        self._idle_warned = False                   # czy ostrzeżono o braku logowania
+        self._retention_due = 0.0                   # kiedy następny przegląd retencji
 
     # -- sterowanie -----------------------------------------------------------
 
@@ -85,6 +98,8 @@ class Scheduler:
         with self._lock:
             if self._thread and self._thread.is_alive():
                 return
+            self._started_at = time.time()
+            self._idle_warned = False
             self._thread = threading.Thread(target=self._loop, daemon=True,
                                             name="fortibackup-scheduler")
             self._thread.start()
@@ -96,17 +111,26 @@ class Scheduler:
             self._mp = master_password
             if first:
                 self._armed_at = time.time()
+            self._idle_warned = False   # ktoś się zalogował — licznik nieaktualny
             self._reload_due = 0.0  # wymuś świeże wczytanie urządzeń
+        # Wpis tylko przy przejściu uśpiony -> aktywny (pierwsze logowanie
+        # po starcie), żeby kolejni logujący się nie powtarzali komunikatu.
+        # Log poza lockiem — EVENTLOG pisze do pliku.
+        if first:
+            EVENTLOG.log("success", "Harmonogram aktywny.", "scheduler")
 
     def disarm(self) -> None:
         with self._lock:
             self._mp = None
             self._armed_at = None
+            # licznik idle liczymy od teraz (disarm to celowa akcja, nie restart)
+            self._started_at = time.time()
+            self._idle_warned = False
             self._next.clear()
             self._sigs.clear()
 
     def refresh(self) -> None:
-        """Wywoływane po zmianach na urządzeniach — przeładuj przy okazji."""
+        """Wywoływane po zmianach na urządzeniach."""
         with self._lock:
             self._reload_due = 0.0
 
@@ -136,6 +160,7 @@ class Scheduler:
             mp = self._mp
             reload_needed = time.time() >= self._reload_due
         if not mp:
+            self._maybe_warn_idle()
             return
 
         if reload_needed:
@@ -152,10 +177,72 @@ class Scheduler:
         for dev in due:
             self._run_scheduled(dev, mp)
 
+        self._maybe_sweep_retention(mp)
+
+    def _maybe_sweep_retention(self, mp: str) -> None:
+        """Raz na RETENTION_SWEEP_SECONDS przejrzyj retencję CAŁEJ floty.
+        Pierwszy przegląd tuż po uzbrojeniu (_retention_due startuje z 0)."""
+        with self._lock:
+            if time.time() < self._retention_due:
+                return
+            self._retention_due = time.time() + RETENTION_SWEEP_SECONDS
+            devices = [d for d in self._devices
+                       if d.retention_mode in ("count", "days", "gfs")]
+        if not devices:
+            return
+        self._run_retention_sweep(devices)
+
+    def _run_retention_sweep(self, devices: List[Device]) -> None:
+        job = JOBS.create("Retencja: przegląd urządzeń")
+        JOBS.log(job, f"Przegląd retencji dla {len(devices)} urządzeń")
+
+        def work():
+            total = 0
+            ok = True
+            try:
+                cfg = load_settings().to_storage_config()
+                with open_storage(cfg) as st:
+                    for dev in devices:
+                        try:
+                            total += apply_retention(
+                                dev, st,
+                                logger=lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}"))
+                        except Exception as e:  # noqa: BLE001 — jedno urządzenie nie psuje reszty
+                            JOBS.log(job, f"[{dev.name}] retencja: {e}")
+                            ok = False
+                JOBS.log(job, f"Przegląd zakończony. Usunięto łącznie {total} kopii.")
+                if total:
+                    EVENTLOG.log("info",
+                                 f"Retencja — przegląd urządzeń: usunięto {total} kopii.",
+                                 "scheduler")
+            except Exception as e:  # noqa: BLE001
+                JOBS.log(job, f"BŁĄD: {e}")
+                ok = False
+            JOBS.finish(job, ok)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _maybe_warn_idle(self) -> None:
+        """Nikt nie zalogował się od restartu — po IDLE_WARN_SECONDS wrzuć
+        JEDNORAZOWE czerwone przypomnienie, że harmonogram śpi i backupy
+        automatyczne nie działają. Pierwsza osoba, która się zaloguje,
+        zobaczy to w globalnym dzienniku."""
+        with self._lock:
+            # uzbrojony (ktoś zalogowany) => harmonogram działa, nie ostrzegaj
+            if self._mp is not None or self._idle_warned or self._started_at is None:
+                return
+            if time.time() - self._started_at < IDLE_WARN_SECONDS:
+                return
+            self._idle_warned = True
+        EVENTLOG.log(
+            "error",
+            "Od restartu nikt się nie zalogował przez ponad dobę — harmonogram "
+            "jest uśpiony, a automatyczne backupy NIE są wykonywane. "
+            "Zaloguj się, aby go uruchomić.",
+            "scheduler")
+
     def _reload_devices(self, mp: str) -> None:
         try:
-            # baza urządzeń żyje lokalnie w /DB — magazyn FTP/SFTP jest
-            # potrzebny dopiero przy samym backupie (_run_scheduled)
             with open_db_storage() as st:
                 db = DeviceDB(st, mp)
                 db.load_or_create()
@@ -164,6 +251,8 @@ class Scheduler:
             with self._lock:
                 self._last_error = f"Odświeżenie bazy: {e}"
                 self._reload_due = time.time() + 60  # spróbuj za minutę
+            EVENTLOG.log("error", f"Harmonogram — odświeżenie bazy urządzeń: {e}",
+                         "scheduler")
             return
 
         now = datetime.now()
@@ -176,7 +265,6 @@ class Scheduler:
                 sig = _sched_signature(dev)
                 if dev.sched_enabled:
                     alive.add(dev.name)
-                    # nowe urządzenie albo zmieniony harmonogram -> przelicz
                     if self._sigs.get(dev.name) != sig or dev.name not in self._next:
                         self._next[dev.name] = compute_next_run(dev, now)
                 self._sigs[dev.name] = sig
@@ -196,11 +284,33 @@ class Scheduler:
                 with open_storage(cfg) as st:
                     path = run_backup(dev, st, logger=lambda m: JOBS.log(job, m))
                     JOBS.log(job, f"[{dev.name}] OK → {path}")
+                    device_dir = device_backup_dir(st, dev)
+                    log = lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}")  # noqa: E731
+                    changed = detect_and_log(st, device_dir, path, log, device=dev)
+                    # TYLKO harmonogram zwija identyczne kopie. Backup ręczny
+                    # zawsze zostawia nowy plik — jak ktoś klika „Backup teraz",
+                    # to zwykle właśnie po to, żeby mieć kopię z tą chwilą.
+                    collapsed = False
+                    if changed is False:
+                        collapsed = True
+                        path = collapse_unchanged(st, device_dir, path, log)
                     job.ok_count += 1
+                    EVENTLOG.log("success",
+                                 (f"Harmonogram — bez zmian: {dev.name} → {path}"
+                                  if collapsed else
+                                  f"Harmonogram — backup OK: {dev.name} → {path}"),
+                                 "scheduler")
+                    try:
+                        apply_retention(dev, st, logger=lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}"))
+                    except Exception as e:  # noqa: BLE001 — nie psuj udanego backupu
+                        JOBS.log(job, f"[{dev.name}] Retencja pominięta: {e}")
             except Exception as e:  # noqa: BLE001
                 JOBS.log(job, f"[{dev.name}] BŁĄD: {e}")
                 job.fail_count += 1
                 ok = False
+                EVENTLOG.log("error",
+                             f"Harmonogram — backup NIEUDANY: {dev.name} — {e}",
+                             "scheduler")
             JOBS.finish(job, ok)
 
         threading.Thread(target=work, daemon=True).start()

@@ -8,10 +8,13 @@ services:
       - "8080:8000"
     volumes:
       - fortibackup-data:/root/.fortibackup-web
-      # Path to your database folder /folder/on/host:/DB
+      # Zaszyfrowana baza urządzeń (devices.db) — katalog z hosta.
+      # Zmień lewą stronę na dowolną ścieżkę na hoście, prawa MUSI zostać /DB.
       - ./db:/DB
     environment:
       - TZ=Europe/Warsaw
+      # Ustaw na true, gdy aplikacja stoi za reverse proxy z TLS (Caddy/nginx)
+      - FORTIBACKUP_HTTPS_ONLY=false
     restart: unless-stopped
 
 volumes:

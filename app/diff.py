@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-CONTEXT_LINES = 3   # ile linii kontekstu wokół zmian przy zwijaniu
+CONTEXT_LINES = 3 
 
 
 @dataclass
@@ -36,7 +36,7 @@ class DiffStats:
 
 
 # --------------------------------------------------------------------------- #
-#  Normalizacja ulotnych pól konfiguracji FortiGate
+#  Normalizacja pól konfiguracji FortiGate gdzie są certyfikaty
 # --------------------------------------------------------------------------- #
 
 _RE_CONF_VER = re.compile(r"^#conf_file_ver=.*$", re.M)
@@ -51,7 +51,6 @@ _MASK_KEY = "<klucz prywatny — pominięty w porównaniu>"
 
 
 def _mask_pem(m: "re.Match") -> str:
-    # zachowaj liczbę linii, żeby numeracja w diffie się nie rozjeżdżała
     n = len(m.group(0).splitlines())
     return "\n".join([_MASK_KEY] * n)
 
@@ -97,7 +96,7 @@ def _esc(s: str) -> str:
 
 
 def _inline_highlight(a: str, b: str) -> Tuple[str, str]:
-    """Podświetlenie zmian wewnątrz zmodyfikowanej linii (jak w Notepad++)."""
+    """Podświetlenie zmian wewnątrz zmodyfikowanej linii."""
     sm = difflib.SequenceMatcher(None, a, b)
     left_parts, right_parts = [], []
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
@@ -145,8 +144,6 @@ def make_diff_html(
         if tag == "equal":
             n = i2 - i1
             if collapse_unchanged and n > CONTEXT_LINES * 2 + 2:
-                # kontekst PRZED zwinięciem i PO nim — bez tego zmiany
-                # wiszą w próżni i nie wiadomo, w której sekcji configu są
                 for k in range(CONTEXT_LINES):
                     rows.append(_row("eq", i1 + k + 1, a[i1 + k], j1 + k + 1, b[j1 + k]))
                 hidden = n - CONTEXT_LINES * 2
@@ -181,7 +178,7 @@ def make_diff_html(
                     rows.append(_row("ins", None, None, j1 + k + 1, lb))
 
     if not (stats.added or stats.removed or stats.changed):
-        body = '<div class="hdr">Konfiguracje są identyczne — brak realnych różnic.</div>'
+        body = '<div class="hdr">Konfiguracje są identyczne — brak różnic.</div>'
     else:
         header = (f'<table><tr>'
                   f'<td class="hdr" colspan="2">{html.escape(name_a)}</td>'

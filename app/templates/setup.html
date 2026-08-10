@@ -4,9 +4,15 @@
     <meta charset="UTF-8">
     <title>FortiBackup Web • Konfiguracja</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
 <body class="bg-[#0d1117] text-[#c9d1d9]">
     <div class="max-w-2xl mx-auto mt-12 p-8">
+        {% if logged %}
+        <a href="/" class="inline-flex items-center gap-x-2 text-sm text-[#8b949e] hover:text-[#c9d1d9] mb-6">
+            <i class="fa-solid fa-arrow-left"></i> Wróć do listy urządzeń
+        </a>
+        {% endif %}
         {% if configured %}
         <h1 class="text-3xl font-bold mb-2">Zmiana konfiguracji magazynu</h1>
         <p class="text-[#8b949e] mb-8">
@@ -15,9 +21,8 @@
         {% else %}
         <h1 class="text-3xl font-bold mb-2">Pierwsza konfiguracja</h1>
         <p class="text-[#8b949e] mb-8">
-            Podaj dane połączenia z magazynem FTP/SFTP na backupy.
-            Baza urządzeń jest trzymana lokalnie w kontenerze (katalog /DB —
-            zamontuj go jako wolumen z hosta w docker-compose).
+            Podaj dane połączenia z magazynem FTP/SFTP na kopię.
+            Baza urządzeń jest trzymana lokalnie w kontenerze.
         </p>
         {% endif %}
 
@@ -54,8 +59,10 @@
                     <input type="text" name="username" required value="{{ settings.username }}" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
                 </div>
                 <div>
-                    <label class="block text-sm mb-1">Hasło (nowe)</label>
-                    <input type="password" name="password" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                    <label class="block text-sm mb-1">Hasło</label>
+                    <input type="password" name="password"
+                           {% if configured %}placeholder="puste = bez zmian"{% endif %}
+                           class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
                 </div>
             </div>
 
@@ -73,8 +80,7 @@
                        class="w-full bg-[#0d1117] border border-amber-700/60 rounded-lg px-3 py-2">
                 <p class="text-xs text-[#8b949e] mt-2">
                     Nie jesteś zalogowany, więc zmiana konfiguracji wymaga znajomości
-                    obecnego hasła do serwera magazynu (ochrona przed podmianą serwera
-                    backupów przez osobę postronną).
+                    obecnego hasła do serwera magazynu.
                 </p>
             </div>
             {% endif %}
@@ -85,6 +91,189 @@
             </button>
         </form>
 
+        {% if email and logged %}
+        <!-- POWIADOMIENIA EMAIL (tylko dla zalogowanych) -->
+        <div class="mt-8 bg-[#161b22] border border-[#30363d] rounded-2xl p-8">
+            <h2 class="text-xl font-bold mb-6"><i class="fa-solid fa-envelope mr-2 text-[#1f6feb]"></i>Powiadomienia email</h2>
+
+            <div id="email-msg" class="hidden mb-4 p-3 rounded-lg text-sm"></div>
+
+            <form id="email-form" class="space-y-5" onsubmit="return false;">
+
+                <!-- ─── SEKCJA 1: SERWER SMTP ─── -->
+                <h3 class="text-sm font-semibold"><i class="fa-solid fa-server mr-2 text-[#8b949e]"></i>Serwer SMTP</h3>
+
+                <div class="grid grid-cols-3 gap-4">
+                    <div class="col-span-2">
+                        <label class="block text-sm mb-1">Serwer SMTP</label>
+                        <input type="text" id="em-host" value="{{ email.host }}" placeholder="smtp.example.com"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-sm mb-1">Port</label>
+                        <input type="number" id="em-port" value="{{ email.port or 587 }}"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm mb-1">Użytkownik SMTP</label>
+                        <input type="text" id="em-username" value="{{ email.username }}"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                    </div>
+                    <div>
+                        <label class="block text-sm mb-1">Hasło SMTP</label>
+                        <input type="password" id="em-password"
+                               placeholder="{% if email.has_password %}pozostaw puste, aby nie zmieniać{% else %}hasło{% endif %}"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                    </div>
+                </div>
+
+                <div class="flex gap-x-6">
+                    <label class="flex items-center gap-x-2 text-sm">
+                        <input type="checkbox" id="em-starttls" {% if email.use_starttls %}checked{% endif %}
+                               class="w-4 h-4 accent-[#1f6feb]"> STARTTLS (port 587)
+                    </label>
+                    <label class="flex items-center gap-x-2 text-sm">
+                        <input type="checkbox" id="em-ssl" {% if email.use_ssl %}checked{% endif %}
+                               class="w-4 h-4 accent-[#1f6feb]"> SSL/TLS (port 465)
+                    </label>
+                </div>
+
+                <div>
+                    <label class="block text-sm mb-1">Adres nadawcy (From)</label>
+                    <input type="text" id="em-from" value="{{ email.from_addr }}" placeholder="fortibackup@example.com"
+                           class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                </div>
+
+                <!-- ─── SEKCJA 2: POWIADOMIENIA O BŁĘDACH ─── -->
+                <div class="border-t border-[#30363d] pt-5 space-y-4">
+                    <h3 class="text-sm font-semibold"><i class="fa-solid fa-triangle-exclamation mr-2 text-[#d29922]"></i>Powiadomienia o błędach</h3>
+                    <p class="text-xs text-[#8b949e]">
+                        Wysyłka ostrzeżeń i błędów z globalnego dziennika (np. nieudany backup).
+                        Zdarzenia są grupowane w wiadomości wysyłanej raz na minutę.
+                    </p>
+                    <label class="flex items-center gap-x-3">
+                        <input type="checkbox" id="em-enabled" {% if email.enabled %}checked{% endif %}
+                               class="w-4 h-4 accent-[#1f6feb]">
+                        <span class="text-sm font-medium">Włącz powiadomienia o błędach</span>
+                    </label>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm mb-1">Wysyłaj od poziomu</label>
+                            <select id="em-level" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                                <option value="warning" {% if email.min_level == 'warning' %}selected{% endif %}>Ostrzeżenia i błędy</option>
+                                <option value="error" {% if email.min_level == 'error' %}selected{% endif %}>Tylko błędy</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm mb-1">Odbiorcy powiadomień</label>
+                            <input type="text" id="em-to" value="{{ email.to_addrs }}" placeholder="admin@example.com"
+                                   class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                        </div>
+                    </div>
+                    <button type="button" onclick="testEmail()"
+                            class="px-5 py-2 border border-[#30363d] hover:bg-[#21262d] rounded-lg text-sm">Testowe powiadomienie</button>
+                </div>
+
+                <!-- ─── SEKCJA 3: RAPORT WYKONANYCH BACKUPÓW ─── -->
+                <div class="border-t border-[#30363d] pt-5 space-y-4">
+                    <h3 class="text-sm font-semibold"><i class="fa-solid fa-calendar-check mr-2 text-[#3fb950]"></i>Raport wykonanych backupów</h3>
+                    <p class="text-xs text-[#8b949e]">
+                        Zbiorczy raport kopii zapasowych wysyłany cyklicznie.
+                        Działa niezależnie od powiadomień o błędach.
+                    </p>
+                    <div class="grid grid-cols-3 gap-4">
+                        <div>
+                            <label class="block text-sm mb-1">Częstotliwość</label>
+                            <select id="em-report" onchange="toggleReportFields()" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                                <option value="off" {% if email.report == 'off' %}selected{% endif %}>Wyłączony</option>
+                                <option value="daily" {% if email.report == 'daily' %}selected{% endif %}>Codziennie</option>
+                                <option value="weekly" {% if email.report == 'weekly' %}selected{% endif %}>Co tydzień</option>
+                            </select>
+                        </div>
+                        <div id="em-report-time-box">
+                            <label class="block text-sm mb-1">Godzina</label>
+                            <input type="time" id="em-report-time" value="{{ email.report_time or '08:00' }}"
+                                   class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                        </div>
+                        <div id="em-report-weekday-box">
+                            <label class="block text-sm mb-1">Dzień tygodnia</label>
+                            <select id="em-report-weekday" class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                                <option value="0" {% if email.report_weekday == 0 %}selected{% endif %}>Poniedziałek</option>
+                                <option value="1" {% if email.report_weekday == 1 %}selected{% endif %}>Wtorek</option>
+                                <option value="2" {% if email.report_weekday == 2 %}selected{% endif %}>Środa</option>
+                                <option value="3" {% if email.report_weekday == 3 %}selected{% endif %}>Czwartek</option>
+                                <option value="4" {% if email.report_weekday == 4 %}selected{% endif %}>Piątek</option>
+                                <option value="5" {% if email.report_weekday == 5 %}selected{% endif %}>Sobota</option>
+                                <option value="6" {% if email.report_weekday == 6 %}selected{% endif %}>Niedziela</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm mb-1">Odbiorcy raportu</label>
+                        <input type="text" id="em-report-to" value="{{ email.report_to_addrs }}" placeholder="raporty@example.com"
+                               class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                        <p class="text-xs text-[#8b949e] mt-1">Wiele adresów rozdziel przecinkiem.</p>
+                    </div>
+                    <button type="button" onclick="reportNow()"
+                            class="px-5 py-2 border border-[#30363d] hover:bg-[#21262d] rounded-lg text-sm">Testowy raport</button>
+                </div>
+
+                <!-- zapis całości -->
+                <div class="border-t border-[#30363d] pt-5">
+                    <button type="button" onclick="saveEmail()"
+                            class="px-6 py-2.5 bg-[#1f6feb] hover:bg-[#388bfd] rounded-lg font-semibold">Zapisz ustawienia email</button>
+                </div>
+            </form>
+        </div>
+
+        <script>
+            function emailFormData() {
+                const fd = new FormData();
+                fd.append('enabled', document.getElementById('em-enabled').checked);
+                fd.append('host', document.getElementById('em-host').value);
+                fd.append('port', document.getElementById('em-port').value);
+                fd.append('username', document.getElementById('em-username').value);
+                fd.append('password', document.getElementById('em-password').value);
+                fd.append('use_ssl', document.getElementById('em-ssl').checked);
+                fd.append('use_starttls', document.getElementById('em-starttls').checked);
+                fd.append('from_addr', document.getElementById('em-from').value);
+                fd.append('to_addrs', document.getElementById('em-to').value);
+                fd.append('min_level', document.getElementById('em-level').value);
+                fd.append('report', document.getElementById('em-report').value);
+                fd.append('report_time', document.getElementById('em-report-time').value);
+                fd.append('report_weekday', document.getElementById('em-report-weekday').value);
+                fd.append('report_to_addrs', document.getElementById('em-report-to').value);
+                return fd;
+            }
+            function toggleReportFields() {
+                const mode = document.getElementById('em-report').value;
+                document.getElementById('em-report-time-box').classList.toggle('hidden', mode === 'off');
+                document.getElementById('em-report-weekday-box').classList.toggle('hidden', mode !== 'weekly');
+            }
+            function showEmailMsg(text, ok) {
+                const box = document.getElementById('email-msg');
+                box.textContent = text;
+                box.className = 'mb-4 p-3 rounded-lg text-sm ' + (ok
+                    ? 'bg-[#12361f] border border-[#238636] text-[#3fb950]'
+                    : 'bg-red-900/30 border border-red-700 text-red-400');
+                box.classList.remove('hidden');
+            }
+            async function postEmail(url) {
+                const res = await fetch(url, { method: 'POST', body: emailFormData() });
+                const data = await res.json().catch(() => ({}));
+                if (res.ok) showEmailMsg(data.message || 'OK', true);
+                else showEmailMsg(data.detail || 'Wystąpił błąd', false);
+            }
+            function saveEmail() { postEmail('/api/email'); }
+            function testEmail() { showEmailMsg('Wysyłam wiadomość testową…', true); postEmail('/api/email/test'); }
+            function reportNow() { showEmailMsg('Wysyłam raport…', true); postEmail('/api/email/report-now'); }
+            toggleReportFields();
+        </script>
+        {% endif %}
+
         {% if configured %}
         <!-- STREFA NIEBEZPIECZNA -->
         <div class="mt-8 bg-[#161b22] border border-red-900/60 rounded-2xl p-6">
@@ -92,7 +281,7 @@
             <p class="text-sm text-[#8b949e] mb-4">
                 Wyczyszczenie konfiguracji usuwa TYLKO lokalne ustawienia połączenia
                 z magazynem (aplikacja wraca do stanu pierwszej konfiguracji).
-                Backupy na magazynie i baza urządzeń w /DB pozostają nietknięte.
+                Backupy na magazynie i baza urządzeń pozostają nietknięte.
             </p>
             <form method="post" action="/setup/reset"
                   onsubmit="return confirm('Na pewno wyczyścić konfigurację magazynu?');"
@@ -111,8 +300,12 @@
             </form>
         </div>
 
-        <p class="text-center mt-6">
+        <p class="text-center mt-6 space-x-4">
+            {% if logged %}
+            <a href="/" class="text-sm text-[#8b949e] hover:text-[#c9d1d9]">← Wróć do listy urządzeń</a>
+            {% else %}
             <a href="/login" class="text-sm text-[#8b949e] hover:text-[#c9d1d9]">← Wróć do logowania</a>
+            {% endif %}
         </p>
         {% endif %}
     </div>
