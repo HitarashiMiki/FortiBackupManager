@@ -31,7 +31,7 @@ from .config import load_settings
 from .storage import open_storage, open_db_storage
 from .devicedb import DeviceDB, Device
 from .fortigate import run_backup, device_backup_dir
-from .changes import detect_and_log
+from .changes import detect_and_log, collapse_unchanged
 from .retention import apply_retention
 from .jobs import JOBS
 from .eventlog import EVENTLOG
@@ -284,12 +284,21 @@ class Scheduler:
                 with open_storage(cfg) as st:
                     path = run_backup(dev, st, logger=lambda m: JOBS.log(job, m))
                     JOBS.log(job, f"[{dev.name}] OK → {path}")
-                    detect_and_log(st, device_backup_dir(st, dev), path,
-                                   lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}"),
-                                   device=dev)
+                    device_dir = device_backup_dir(st, dev)
+                    log = lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}")  # noqa: E731
+                    changed = detect_and_log(st, device_dir, path, log, device=dev)
+                    # TYLKO harmonogram zwija identyczne kopie. Backup ręczny
+                    # zawsze zostawia nowy plik — jak ktoś klika „Backup teraz",
+                    # to zwykle właśnie po to, żeby mieć kopię z tą chwilą.
+                    collapsed = False
+                    if changed is False:
+                        collapsed = True
+                        path = collapse_unchanged(st, device_dir, path, log)
                     job.ok_count += 1
                     EVENTLOG.log("success",
-                                 f"Harmonogram — backup OK: {dev.name} → {path}",
+                                 (f"Harmonogram — bez zmian: {dev.name} → {path}"
+                                  if collapsed else
+                                  f"Harmonogram — backup OK: {dev.name} → {path}"),
                                  "scheduler")
                     try:
                         apply_retention(dev, st, logger=lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}"))

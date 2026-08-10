@@ -32,6 +32,7 @@ import posixpath
 import subprocess
 import threading
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from typing import Optional
 
 from fastapi import FastAPI, Request, Form, HTTPException, Depends
@@ -49,11 +50,15 @@ from .devicedb import (DeviceDB, Device, WrongPasswordError, DeviceDBError,
                        DBTooNewError, DB_FILENAME, FOLDER_COLORS, db_revision)
 from .fortigate import run_backup, device_backup_dir, sanitize_name, BACKUP_DIR
 from .diff import make_diff_html
-from .changes import changed_flags, detect_and_log, find_backup_dir_for_host
+from .changes import (changed_flags, detect_and_log, find_backup_dir_for_host,
+                      first_seen_map)
 from .audit import run_audit
 from .retention import apply_retention, RETENTION_MODES
-from .security import (SESSIONS, LOGIN_LIMITER, get_or_create_secret,
-                       safe_backup_path, PathTraversalError)
+from .security import (SESSIONS, LOGIN_GUARD, get_or_create_secret,
+                       safe_backup_path, PathTraversalError,
+                       load_security_config, save_security_config, SecurityConfig,
+                       validate_whitelist_entry, SMART_MAX_ATTEMPTS,
+                       SMART_BASE_MINUTES, SMART_FACTOR, SMART_MAX_MINUTES)
 from .jobs import JOBS
 from .eventlog import EVENTLOG, LEVELS as EVENTLOG_LEVELS
 from .notifier import (NOTIFIER, load_email_config, save_email_config,
@@ -150,6 +155,20 @@ _DEVICE_PUBLIC_FIELDS = ("name", "host", "port", "username", "method",
                          "gfs_daily", "gfs_weekly", "gfs_monthly")
 
 
+def _human_duration(seconds: int) -> str:
+    """Czas po polsku, bez sekundowej precyzji tam, gdzie nikogo nie obchodzi."""
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds} s"
+    minutes = (seconds + 59) // 60
+    if minutes < 60:
+        return f"{minutes} min"
+    hours = minutes / 60
+    if hours < 24:
+        return f"{hours:.0f} h" if hours == int(hours) else f"{hours:.1f} h"
+    return f"{hours / 24:.1f} dnia".replace(".0 ", " ")
+
+
 def _device_public(d: Device) -> dict:
     out = {k: getattr(d, k) for k in _DEVICE_PUBLIC_FIELDS}
     out["has_password"] = bool(d.password)
@@ -225,20 +244,25 @@ def login(request: Request, master_password: str = Form(...),
     first_run = _is_first_run()
 
     client_ip = request.client.host if request.client else "?"
-    if not LOGIN_LIMITER.allow(client_ip):
+    blocked_for = LOGIN_GUARD.check(client_ip)
+    if blocked_for:
         return templates.TemplateResponse(
             request=request, name="login.html",
-            context={"error": "Zbyt dużo prób logowania z tego adresu — odczekaj minutę.",
-                     "first_run": first_run})
+            context={"error": "Zbyt dużo nieudanych prób z tego adresu — "
+                              f"blokada jeszcze przez {_human_duration(blocked_for)}.",
+                     "first_run": first_run},
+            status_code=429)
 
+    seccfg = load_security_config()
     if first_run:
         # Pierwsze logowanie TWORZY zaszyfrowaną bazę — dowolne hasło zostanie
         # przyjęte, więc literówka dałaby bazę z hasłem, którego nikt nie zna
         # (nie da się go odzyskać). Stąd wymagane potwierdzenie.
-        if len(master_password) < 8:
+        if len(master_password) < seccfg.min_master_password_length:
             return templates.TemplateResponse(
                 request=request, name="login.html",
-                context={"error": "Hasło główne musi mieć co najmniej 8 znaków.",
+                context={"error": "Hasło główne musi mieć co najmniej "
+                                  f"{seccfg.min_master_password_length} znaków.",
                          "first_run": True})
         if confirm_master_password != master_password:
             return templates.TemplateResponse(
@@ -253,6 +277,22 @@ def login(request: Request, master_password: str = Form(...),
                 _migrate_db_from_remote(settings, dbst, local_path)
             _load_db(dbst, master_password)
     except WrongPasswordError:
+        # Tylko BŁĘDNE HASŁO liczy się do blokady. Błąd magazynu czy zbyt nowa
+        # baza to nie jest próba włamania — banowanie za nie odcinałoby admina
+        # od aplikacji dokładnie wtedy, gdy musi ją naprawić.
+        banned_for = LOGIN_GUARD.record_failure(client_ip)
+        if seccfg.log_login_attempts:
+            EVENTLOG.log("warning",
+                         f"Nieudane logowanie z {client_ip}" +
+                         (f" — blokada na {_human_duration(banned_for)}." if banned_for else "."),
+                         "security")
+        if banned_for:
+            return templates.TemplateResponse(
+                request=request, name="login.html",
+                context={"error": "Zbyt dużo nieudanych prób — adres zablokowany na "
+                                  f"{_human_duration(banned_for)}.",
+                         "first_run": False},
+                status_code=429)
         return templates.TemplateResponse(
             request=request, name="login.html",
             context={"error": "Błędne hasło bazy danych", "first_run": False})
@@ -271,6 +311,9 @@ def login(request: Request, master_password: str = Form(...),
             request=request, name="login.html",
             context={"error": f"Błąd połączenia: {e}", "first_run": first_run})
 
+    LOGIN_GUARD.record_success(client_ip)
+    if seccfg.log_login_attempts:
+        EVENTLOG.log("info", f"Zalogowano z {client_ip}.", "security")
     # W cookie ląduje wyłącznie losowy token; hasło zostaje w RAM serwera.
     request.session["token"] = SESSIONS.create(master_password)
     # Każde udane logowanie uzbraja/odświeża harmonogram automatycznych
@@ -300,9 +343,14 @@ def _setup_authorized(request: Request, confirm_password: str = "") -> bool:
     if not confirm_password:
         return False
     client_ip = request.client.host if request.client else "?"
-    if not LOGIN_LIMITER.allow(client_ip):
+    if LOGIN_GUARD.check(client_ip):
         return False
-    return confirm_password == settings.to_storage_config().password
+    ok = confirm_password == settings.to_storage_config().password
+    if not ok:
+        # Ta ścieżka też jest zgadywaniem hasła — musi wchodzić do tej samej
+        # puli prób co /login, inaczej blokada logowania jest do obejścia.
+        LOGIN_GUARD.record_failure(client_ip)
+    return ok
 
 
 @app.get("/setup", response_class=HTMLResponse)
@@ -1026,9 +1074,88 @@ def eventlog_recent(level: str = "", limit: int = 200,
     return {"events": EVENTLOG.recent(limit=limit, level=lvl)}
 
 
-# CELOWO brak endpointu kasującego globalny dziennik. Plik events.jsonl jest
-# trwałym zapisem historii (backupy, retencja, zmiany inwentarza) i NIE może
-# dać się wyczyścić z UI/API
+
+
+# ======================== BEZPIECZEŃSTWO ========================
+
+@app.get("/security", response_class=HTMLResponse)
+def security_page(request: Request):
+    """Osobna strona (nie modal) — ustawienia bezpieczeństwa."""
+    if not SESSIONS.get_master_password(request.session.get("token")):
+        return RedirectResponse("/login", status_code=HTTP_302_FOUND)
+    return templates.TemplateResponse(request=request, name="security.html", context={})
+
+
+@app.get("/api/security")
+def get_security(mp: str = Depends(get_master_password)):
+    cfg = load_security_config()
+    return {
+        "config": asdict(cfg),
+        # stałe trybu inteligentnego — UI je pokazuje, ale nie pozwala zmieniać
+        "smart": {"max_attempts": SMART_MAX_ATTEMPTS,
+                  "base_minutes": SMART_BASE_MINUTES,
+                  "factor": SMART_FACTOR,
+                  "max_minutes": SMART_MAX_MINUTES},
+        "bans": LOGIN_GUARD.active_bans(),
+        "offenders": LOGIN_GUARD.recent_offenders(),
+    }
+
+
+@app.post("/api/security")
+def save_security(
+    max_attempts: int = Form(5),
+    window_minutes: int = Form(1),
+    ban_minutes: int = Form(15),
+    smart_ban: bool = Form(False),
+    smart_grace_bans: int = Form(2),
+    whitelist: str = Form(""),
+    session_ttl_hours: int = Form(8),
+    min_master_password_length: int = Form(8),
+    log_login_attempts: bool = Form(True),
+    verify_device_tls: bool = Form(False),
+    mp: str = Depends(get_master_password),
+):
+    # Whitelist przychodzi jako tekst (jeden wpis na linię lub po przecinku).
+    # Walidujemy KAŻDY wpis — zły format cicho przepuszczony oznaczałby, że
+    # admin myśli, że ma wyjątek, a go nie ma.
+    entries = []
+    for raw in whitelist.replace(",", "\n").splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            entries.append(validate_whitelist_entry(raw))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    cfg = SecurityConfig(
+        max_attempts=max_attempts, window_minutes=window_minutes,
+        ban_minutes=ban_minutes, smart_ban=smart_ban,
+        smart_grace_bans=smart_grace_bans, whitelist=entries,
+        session_ttl_hours=session_ttl_hours,
+        min_master_password_length=min_master_password_length,
+        log_login_attempts=log_login_attempts,
+        verify_device_tls=verify_device_tls,
+    )
+    save_security_config(cfg)
+    EVENTLOG.log("info", "Zmieniono ustawienia bezpieczeństwa.", "security")
+    return {"status": "ok", "message": "Zapisano ustawienia bezpieczeństwa.",
+            "config": asdict(cfg)}
+
+
+@app.delete("/api/security/bans/{ip}")
+def unban_ip(ip: str, mp: str = Depends(get_master_password)):
+    was = LOGIN_GUARD.unban(ip)
+    EVENTLOG.log("info", f"Zdjęto blokadę logowania z adresu {ip}.", "security")
+    return {"status": "ok", "was_banned": was,
+            "message": f"Odblokowano {ip}." if was else f"{ip} nie był zablokowany."}
+
+
+@app.post("/api/security/bans/reset")
+def reset_bans(mp: str = Depends(get_master_password)):
+    LOGIN_GUARD.reset()
+    EVENTLOG.log("info", "Wyczyszczono wszystkie blokady logowania.", "security")
+    return {"status": "ok", "message": "Wyczyszczono blokady."}
 
 
 # ======================== SYNCHRONIZACJA MIĘDZY UŻYTKOWNIKAMI ========================
@@ -1055,10 +1182,14 @@ def list_versions(device_name: str, mp: str = Depends(get_master_password)):
         files = [f for f in st.list_files(path) if not f.name.startswith(".")]
         files.sort(key=lambda f: f.name, reverse=True)
         flags = changed_flags(st, path)
+        # first_seen: kopia zwinięta przez harmonogram (identyczna treść przez
+        # kilka backupów) — nazwa pierwszego pliku z tą treścią
+        seen = first_seen_map(st, path)
         return {"versions": [
             {"name": f.name, "path": f.path, "size": f.size,
              "mtime": f.mtime.isoformat() if f.mtime else None,
-             "changed": flags.get(f.name)}
+             "changed": flags.get(f.name),
+             "unchanged_since": seen.get(f.name)}
             for f in files
         ]}
 

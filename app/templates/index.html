@@ -31,6 +31,9 @@
             <a href="/setup" class="text-[#8b949e] hover:text-white" title="Konfiguracja magazynu">
                 <i class="fa-solid fa-gear"></i>
             </a>
+            <a href="/security" class="text-[#8b949e] hover:text-white" title="Bezpieczeństwo">
+                <i class="fa-solid fa-lock"></i>
+            </a>
             <a href="/logout" class="flex items-center gap-x-2 hover:text-red-400">
                 <i class="fa-solid fa-sign-out-alt"></i> <span>Wyloguj</span>
             </a>
@@ -1300,6 +1303,14 @@
             addLog(`Wybrano urządzenie: ${device.name}`);
         }
 
+        // "FGT_20260804_085110.conf" -> "04.08.2026 08:51"
+        function fmtBackupStamp(filename) {
+            const m = /_(\d{8})_(\d{6})\.conf$/.exec(filename || '');
+            if (!m) return filename || '';
+            const d = m[1], t = m[2];
+            return `${d.slice(6, 8)}.${d.slice(4, 6)}.${d.slice(0, 4)} ${t.slice(0, 2)}:${t.slice(2, 4)}`;
+        }
+
         function loadVersions(deviceName) {
             fetch(`/api/versions/${deviceName}`)
                 .then(async r => {
@@ -1329,9 +1340,16 @@
                             ? `<span class="inline-block w-2 h-2 rounded-full bg-[#3fb950] ml-2 align-middle"
                                      title="Konfiguracja zmieniła się względem poprzedniej wersji"></span>`
                             : '';
+                        // kopia zwinięta przez harmonogram: kolejne automatyczne
+                        // backupy miały identyczną treść, więc trzymamy jeden plik
+                        // z aktualną datą. Ikonka mówi, od kiedy nic się nie zmienia.
+                        const sinceIcon = version.unchanged_since
+                            ? `<i class="fa-solid fa-link text-[#8b949e] ml-2 text-[10px]"
+                                  title="Bez zmian od ${fmtBackupStamp(version.unchanged_since)} — kolejne automatyczne backupy miały identyczną treść"></i>`
+                            : '';
                         row.innerHTML = `
                             <td class="px-3"><input type="checkbox" class="version-checkbox accent-[#1f6feb]" data-path="${version.path}"></td>
-                            <td class="px-3 py-2 font-mono text-xs">${version.name}${changedDot}</td>
+                            <td class="px-3 py-2 font-mono text-xs">${version.name}${changedDot}${sinceIcon}</td>
                             <td class="px-3 py-2 text-xs">${version.mtime ? new Date(version.mtime).toLocaleString('pl-PL') : '-'}</td>
                             <td class="px-3 py-2 text-right text-xs">${(version.size / 1024).toFixed(1)} KB</td>
                             <td class="px-3 py-2">

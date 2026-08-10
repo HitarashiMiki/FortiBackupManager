@@ -71,6 +71,7 @@ class RemoteStorage:
     def download_bytes(self, path: str) -> bytes: ...
     def delete(self, path: str) -> None: ...
     def exists(self, path: str) -> bool: ...
+    def rename(self, src: str, dst: str) -> None: ...
 
     def join(self, *parts: str) -> str:
         return posixpath.join(self.cfg.base_path, *parts)
@@ -204,6 +205,17 @@ class SFTPStorage(RemoteStorage):
             return True
         except FileNotFoundError:
             return False
+
+    def rename(self, src: str, dst: str) -> None:
+        try:
+            # posix_rename nadpisuje cel; zwykłe rename po SFTP potrafi
+            # odmówić, gdy plik docelowy istnieje
+            try:
+                self._sftp.posix_rename(src, dst)
+            except (AttributeError, IOError):
+                self._sftp.rename(src, dst)
+        except OSError as e:
+            raise StorageError(f"Nie można zmienić nazwy {src} → {dst}: {e}") from e
 
 
 # --------------------------------------------------------------------------- #
@@ -346,6 +358,12 @@ class FTPStorage(RemoteStorage):
         except ftplib.all_errors:
             return False
 
+    def rename(self, src: str, dst: str) -> None:
+        try:
+            self._ftp.rename(src, dst)
+        except ftplib.all_errors as e:
+            raise StorageError(f"Nie można zmienić nazwy {src} → {dst}: {e}") from e
+
 
 # --------------------------------------------------------------------------- #
 #  Local storage (for devices.db)
@@ -433,6 +451,12 @@ class LocalStorage(RemoteStorage):
     def exists(self, path: str) -> bool:
         from pathlib import Path
         return Path(path).is_file()
+
+    def rename(self, src: str, dst: str) -> None:
+        try:
+            os.replace(src, dst)
+        except OSError as e:
+            raise StorageError(f"Nie można zmienić nazwy {src} → {dst}: {e}") from e
 
 
 # Stałe miejsce bazy urządzeń w kontenerze — docker-compose montuje tu

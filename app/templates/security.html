@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>FortiBackup Web • Bezpieczeństwo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+<body class="bg-[#0d1117] text-[#c9d1d9]">
+    <div class="max-w-3xl mx-auto mt-12 p-8 pb-20">
+        <a href="/" class="inline-flex items-center gap-x-2 text-sm text-[#8b949e] hover:text-[#c9d1d9] mb-6">
+            <i class="fa-solid fa-arrow-left"></i> Wróć do listy urządzeń
+        </a>
+
+        <h1 class="text-3xl font-bold mb-2">
+            <i class="fa-solid fa-lock text-[#3fb950] mr-2"></i>Bezpieczeństwo
+        </h1>
+        <p class="text-[#8b949e] mb-8">
+            Ustawienia obowiązują wszystkich użytkowników. Zapisywane w
+            <code class="text-[#8b949e]">security.json</code> w katalogu danych aplikacji.
+        </p>
+
+        <div id="flash" class="hidden mb-4 p-3 rounded-lg text-sm"></div>
+
+        <!-- ==================== BLOKADA LOGOWANIA ==================== -->
+        <section class="bg-[#161b22] border border-[#30363d] rounded-2xl p-8 space-y-6 mb-6">
+            <div>
+                <h2 class="text-xl font-semibold">Blokada logowania</h2>
+                <p class="text-sm text-[#8b949e] mt-1">
+                    Po serii nieudanych prób adres IP zostaje odcięty od ekranu logowania.
+                </p>
+            </div>
+
+            <label class="flex items-start gap-x-3 cursor-pointer">
+                <input type="checkbox" id="smart_ban" class="mt-1 accent-[#1f6feb]" onchange="applySmartMode()">
+                <span>
+                    <span class="font-medium">Inteligentne blokowanie</span>
+                    <span class="block text-sm text-[#8b949e]">
+                        Aplikacja sama dobiera czas blokady. Pierwsze
+                        <span id="smart-grace-label">2</span> blokady są krótkie
+                        (<span id="smart-base">5</span> min), Jeśli próby trwają dalej, każda kolejna
+                        blokada jest <span id="smart-factor">4</span> dłuższa
+                        (do <span id="smart-max">24 h</span>). Próg to zawsze
+                        <span id="smart-attempts">5</span> nieudanych prób.
+                    </span>
+                </span>
+            </label>
+
+            <div class="grid grid-cols-3 gap-4" id="manual-fields">
+                <div>
+                    <label class="block text-sm mb-1">Nieudanych prób</label>
+                    <input type="number" id="max_attempts" min="1" max="100"
+                           class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                </div>
+                <div>
+                    <label class="block text-sm mb-1">W ciągu (minut)</label>
+                    <input type="number" id="window_minutes" min="1" max="1440"
+                           class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                </div>
+                <div>
+                    <label class="block text-sm mb-1">Blokada na (minut)</label>
+                    <input type="number" id="ban_minutes" min="1" max="1440"
+                           class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                </div>
+            </div>
+
+            <div id="grace-field">
+                <label class="block text-sm mb-1">Ile pierwszych blokad jest krótkich</label>
+                <input type="number" id="smart_grace_bans" min="0" max="10"
+                       class="w-32 bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                <p class="text-xs text-[#8b949e] mt-1">Dotyczy trybu inteligentnego.</p>
+            </div>
+        </section>
+
+        <!-- ==================== WHITELISTA ==================== -->
+        <section class="bg-[#161b22] border border-[#30363d] rounded-2xl p-8 space-y-4 mb-6">
+            <div>
+                <h2 class="text-xl font-semibold">Whitelist</h2>
+                <p class="text-sm text-[#8b949e] mt-1">
+                    Pojedyncze adresy (<code>10.0.0.5</code>) lub całe sieci
+                    (<code>10.0.0.0/24</code>).
+                </p>
+            </div>
+
+            <div class="flex gap-x-3 items-start">
+                <select id="whitelist" size="5"
+                        class="flex-1 bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2 text-sm">
+                </select>
+                <button type="button" onclick="removeWhitelist()"
+                        class="px-3 py-2 rounded-lg bg-[#21262d] border border-[#30363d] hover:border-red-700 hover:text-red-400 text-sm">
+                    <i class="fa-solid fa-trash mr-1"></i>Usuń
+                </button>
+            </div>
+
+            <div class="flex gap-x-3">
+                <input type="text" id="whitelist-new" placeholder="np. 10.140.1.0/24"
+                       onkeydown="if (event.key === 'Enter') { event.preventDefault(); addWhitelist(); }"
+                       class="flex-1 bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2 text-sm">
+                <button type="button" onclick="addWhitelist()"
+                        class="px-3 py-2 rounded-lg bg-[#1f6feb] hover:bg-[#2f81f7] text-white text-sm">
+                    <i class="fa-solid fa-plus mr-1"></i>Dodaj
+                </button>
+            </div>
+        </section>
+
+        <!-- ==================== SESJA I HASŁO ==================== -->
+        <section class="bg-[#161b22] border border-[#30363d] rounded-2xl p-8 space-y-6 mb-6">
+            <h2 class="text-xl font-semibold">Sesja i hasło główne</h2>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm mb-1">Długość sesji (godzin)</label>
+                    <input type="number" id="session_ttl_hours" min="1" max="720"
+                           class="w-full bg-[#0d1117] border border-[#30363d] rounded-lg px-3 py-2">
+                    <p class="text-xs text-[#8b949e] mt-1">
+                        Po tym czasie bez aktywności trzeba zalogować się ponownie.
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================== AUDYT I POŁĄCZENIA ==================== -->
+        <section class="bg-[#161b22] border border-[#30363d] rounded-2xl p-8 space-y-5 mb-6">
+            <h2 class="text-xl font-semibold">Audyt i połączenia</h2>
+
+            <label class="flex items-start gap-x-3 cursor-pointer">
+                <input type="checkbox" id="log_login_attempts" class="mt-1 accent-[#1f6feb]">
+                <span>
+                    <span class="font-medium">Zapisuj logowania w globalnym dzienniku</span>
+                    <span class="block text-sm text-[#8b949e]">
+                        Udane i nieudane próby, z adresem IP.
+                    </span>
+                </span>
+            </label>
+
+            <label class="flex items-start gap-x-3 cursor-pointer">
+                <input type="checkbox" id="verify_device_tls" class="mt-1 accent-[#1f6feb]">
+                <span>
+                    <span class="font-medium">Weryfikuj certyfikat FortiGate (metoda API)</span>
+                    <span class="block text-sm text-[#8b949e]">
+                        Włącz tylko, jeśli urządzenia mają certyfikaty od zaufanego CA —
+                        przy domyślnych, samopodpisanych backup przez API zacznie zwracać błąd.
+                    </span>
+                </span>
+            </label>
+        </section>
+
+        <!-- ==================== AKTYWNE BLOKADY ==================== -->
+        <section class="bg-[#161b22] border border-[#30363d] rounded-2xl p-8 mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold">Zablokowane adresy</h2>
+                <div class="flex gap-x-2">
+                    <button type="button" onclick="loadBans()"
+                            class="px-3 py-1.5 rounded-lg bg-[#21262d] border border-[#30363d] text-sm hover:border-[#8b949e]">
+                        <i class="fa-solid fa-rotate mr-1"></i>Odśwież
+                    </button>
+                    <button type="button" onclick="resetBans()"
+                            class="px-3 py-1.5 rounded-lg bg-[#21262d] border border-[#30363d] text-sm hover:border-red-700 hover:text-red-400">
+                        Usuń wszystkie
+                    </button>
+                </div>
+            </div>
+            <div id="bans" class="text-sm"></div>
+            <p class="text-xs text-[#8b949e] mt-3">
+                Blokady działają tylko do restartu kontenera. Po restarcie wszystkie adresy są odblokowane.
+            </p>
+        </section>
+
+        <div class="flex gap-x-3">
+            <button type="button" onclick="saveSecurity()"
+                    class="px-5 py-2.5 rounded-lg bg-[#238636] hover:bg-[#2ea043] text-white font-medium">
+                <i class="fa-solid fa-floppy-disk mr-2"></i>Zapisz ustawienia
+            </button>
+            <a href="/" class="px-5 py-2.5 rounded-lg bg-[#21262d] border border-[#30363d] hover:border-[#8b949e]">
+                Anuluj
+            </a>
+        </div>
+    </div>
+
+<script>
+    let smartConsts = {};
+
+    function flash(msg, ok) {
+        const box = document.getElementById('flash');
+        box.textContent = msg;
+        box.className = ok
+            ? 'mb-4 p-3 rounded-lg text-sm bg-green-900/30 border border-green-700 text-[#3fb950]'
+            : 'mb-4 p-3 rounded-lg text-sm bg-red-900/30 border border-red-700 text-red-400';
+        box.classList.remove('hidden');
+    }
+
+    // Tryb inteligentny ma zahardkodowaną logikę — ręczne pola tracą wtedy sens,
+    // więc je wyszarzamy zamiast udawać, że coś zmieniają.
+    function applySmartMode() {
+        const smart = document.getElementById('smart_ban').checked;
+        ['max_attempts', 'window_minutes', 'ban_minutes'].forEach(id => {
+            const el = document.getElementById(id);
+            el.disabled = smart;
+            el.classList.toggle('opacity-40', smart);
+        });
+        document.getElementById('manual-fields').classList.toggle('opacity-60', smart);
+        document.getElementById('grace-field').classList.toggle('hidden', !smart);
+    }
+
+    function renderWhitelist(entries) {
+        const sel = document.getElementById('whitelist');
+        sel.innerHTML = '';
+        entries.forEach(e => {
+            const opt = document.createElement('option');
+            opt.value = e;
+            opt.textContent = e;      // textContent, nie innerHTML — dane od użytkownika
+            sel.appendChild(opt);
+        });
+        if (entries.length === 0) {
+            const opt = document.createElement('option');
+            opt.disabled = true;
+            opt.textContent = '(brak wyjątków — blokada obowiązuje wszystkich)';
+            sel.appendChild(opt);
+        }
+    }
+
+    function whitelistEntries() {
+        return Array.from(document.getElementById('whitelist').options)
+                    .filter(o => !o.disabled).map(o => o.value);
+    }
+
+    function addWhitelist() {
+        const input = document.getElementById('whitelist-new');
+        const value = input.value.trim();
+        if (!value) return;
+        const entries = whitelistEntries();
+        if (entries.includes(value)) { flash('Ten wpis już jest na liście.', false); return; }
+        entries.push(value);
+        renderWhitelist(entries);
+        input.value = '';
+    }
+
+    function removeWhitelist() {
+        const sel = document.getElementById('whitelist');
+        if (!sel.value) return;
+        renderWhitelist(whitelistEntries().filter(e => e !== sel.value));
+    }
+
+    function fmtLeft(seconds) {
+        if (seconds < 60) return seconds + ' s';
+        const m = Math.ceil(seconds / 60);
+        return m < 60 ? m + ' min' : (m / 60).toFixed(1) + ' h';
+    }
+
+    async function loadBans() {
+        const res = await fetch('/api/security');
+        if (res.status === 401) { window.location = '/login'; return; }
+        const data = await res.json();
+        const box = document.getElementById('bans');
+        box.innerHTML = '';
+        const bans = data.bans || [];
+        if (bans.length === 0) {
+            box.innerHTML = '<div class="text-[#8b949e]">Brak zablokowanych adresów.</div>';
+        }
+        bans.forEach(b => {
+            const row = document.createElement('div');
+            row.className = 'flex justify-between items-center py-2 border-b border-[#30363d]';
+            const info = document.createElement('div');
+            const ip = document.createElement('span');
+            ip.className = 'font-mono';
+            ip.textContent = b.ip;
+            const meta = document.createElement('span');
+            meta.className = 'text-[#8b949e] ml-3';
+            meta.textContent = `zostało ${fmtLeft(b.seconds_left)} • blokada nr ${b.ban_count}`;
+            info.append(ip, meta);
+            const btn = document.createElement('button');
+            btn.className = 'px-3 py-1 rounded-lg bg-[#21262d] border border-[#30363d] text-xs hover:border-[#3fb950] hover:text-[#3fb950]';
+            btn.textContent = 'Odblokuj';
+            btn.onclick = () => unban(b.ip);
+            row.append(info, btn);
+            box.appendChild(row);
+        });
+        // adresy z historią, ale już odblokowane — kontekst, czy ktoś się dobija
+        const past = (data.offenders || []).filter(o => !o.banned && o.ban_count > 0);
+        if (past.length) {
+            const note = document.createElement('div');
+            note.className = 'text-xs text-[#8b949e] mt-3';
+            note.textContent = 'Wcześniej blokowane: ' +
+                past.map(o => `${o.ip} (${o.ban_count}×)`).join(', ');
+            box.appendChild(note);
+        }
+    }
+
+    async function unban(ip) {
+        await fetch('/api/security/bans/' + encodeURIComponent(ip), { method: 'DELETE' });
+        loadBans();
+    }
+
+    async function resetBans() {
+        if (!confirm('Zdjąć wszystkie blokady?')) return;
+        await fetch('/api/security/bans/reset', { method: 'POST' });
+        loadBans();
+    }
+
+    async function loadSecurity() {
+        const res = await fetch('/api/security');
+        if (res.status === 401) { window.location = '/login'; return; }
+        const data = await res.json();
+        const c = data.config;
+        smartConsts = data.smart || {};
+
+        document.getElementById('max_attempts').value = c.max_attempts;
+        document.getElementById('window_minutes').value = c.window_minutes;
+        document.getElementById('ban_minutes').value = c.ban_minutes;
+        document.getElementById('smart_ban').checked = c.smart_ban;
+        document.getElementById('smart_grace_bans').value = c.smart_grace_bans;
+        document.getElementById('session_ttl_hours').value = c.session_ttl_hours;
+        document.getElementById('min_master_password_length').value = c.min_master_password_length;
+        document.getElementById('log_login_attempts').checked = c.log_login_attempts;
+        document.getElementById('verify_device_tls').checked = c.verify_device_tls;
+        renderWhitelist(c.whitelist || []);
+
+        document.getElementById('smart-attempts').textContent = smartConsts.max_attempts;
+        document.getElementById('smart-base').textContent = smartConsts.base_minutes;
+        document.getElementById('smart-factor').textContent = smartConsts.factor;
+        document.getElementById('smart-max').textContent = (smartConsts.max_minutes / 60) + ' h';
+        document.getElementById('smart-grace-label').textContent = c.smart_grace_bans;
+
+        applySmartMode();
+        loadBans();
+    }
+
+    async function saveSecurity() {
+        const body = new URLSearchParams();
+        body.append('max_attempts', document.getElementById('max_attempts').value);
+        body.append('window_minutes', document.getElementById('window_minutes').value);
+        body.append('ban_minutes', document.getElementById('ban_minutes').value);
+        body.append('smart_ban', document.getElementById('smart_ban').checked);
+        body.append('smart_grace_bans', document.getElementById('smart_grace_bans').value);
+        body.append('session_ttl_hours', document.getElementById('session_ttl_hours').value);
+        body.append('min_master_password_length', document.getElementById('min_master_password_length').value);
+        body.append('log_login_attempts', document.getElementById('log_login_attempts').checked);
+        body.append('verify_device_tls', document.getElementById('verify_device_tls').checked);
+        body.append('whitelist', whitelistEntries().join('\n'));
+
+        const res = await fetch('/api/security', { method: 'POST', body });
+        if (res.status === 401) { window.location = '/login'; return; }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { flash(data.detail || 'Nie udało się zapisać ustawień.', false); return; }
+        document.getElementById('smart-grace-label').textContent = data.config.smart_grace_bans;
+        renderWhitelist(data.config.whitelist || []);
+        flash(data.message || 'Zapisano.', true);
+    }
+
+    window.onload = loadSecurity;
+</script>
+</body>
+</html>

@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Callable, Optional
 
 from .devicedb import Device
-from .security import register_secret, SECRET_MASK
+from .security import register_secret, SECRET_MASK, load_security_config
 from .storage import RemoteStorage, StorageConfig
 
 BACKUP_DIR = "backups"
@@ -285,5 +285,8 @@ def run_backup(device: Device, storage: RemoteStorage, logger: Optional[Logger] 
     register_secret(device.api_token)
     register_secret(storage.cfg.password)
     if device.method == "api_pull":
-        return backup_api_pull(device, storage, logger)
+        # Weryfikacja certyfikatu FortiGate — sterowana ze strony bezpieczeństwa.
+        # Domyślnie wyłączona, bo urządzenia mają zwykle certyfikat self-signed.
+        return backup_api_pull(device, storage, logger,
+                               verify_tls=load_security_config().verify_device_tls)
     return backup_ssh_push(device, storage, logger)
