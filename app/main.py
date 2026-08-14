@@ -198,15 +198,46 @@ def _load_db(st, mp: str) -> DeviceDB:
     return db
 
 
+# Gdzie jest baza urządzeń — od tego zależy, co ekran logowania ma powiedzieć.
+DB_LOCAL = "local"        # /DB/devices.db istnieje — normalne logowanie
+DB_REMOTE = "remote"      # brak lokalnie, ale KOPIA JEST na magazynie (odtworzymy)
+DB_NONE = "none"          # nie ma nigdzie — dopiero tworzymy (pierwsze uruchomienie)
+DB_UNKNOWN = "unknown"    # brak lokalnie, magazynu nie da się sprawdzić
+
+
+def _db_state() -> str:
+    """Ustala, gdzie jest baza urządzeń.
+
+    Dlaczego nie wystarczy sprawdzenie `/DB/devices.db`: gdy plik zniknie, 
+    ekran logowania proponował UTWORZENIE NOWEJ bazy — czyli
+    dokładnie to, czego w takiej sytuacji nie wolno zrobić. Jeśli kopia bazy
+    leży na magazynie, jest to sytuacja do ODTWORZENIA, a nie do zakładania
+    nowej; przy niepewności nie proponujemy tworzenia niczego.
+    """
+    try:
+        with open_db_storage() as dbst:
+            if dbst.exists(dbst.join(DB_FILENAME)):
+                return DB_LOCAL
+    except Exception:  # noqa: BLE001 — nie wiemy = nie proponuj nowej bazy
+        return DB_UNKNOWN
+
+    settings = load_settings()
+    if not settings.host:
+        return DB_NONE          # magazyn nieskonfigurowany = świeża instalacja
+    try:
+        with open_storage(settings.to_storage_config()) as rst:
+            if rst.exists(rst.join(DB_FILENAME)):
+                return DB_REMOTE
+    except Exception:  # noqa: BLE001 — magazyn offline: nie wiadomo, czy baza tam jest
+        return DB_UNKNOWN
+    return DB_NONE
+
+
 def _is_first_run() -> bool:
     """Czy baza urządzeń jeszcze nie istnieje? Wtedy hasło podane przy
     logowaniu dopiero JĄ TWORZY — ekran logowania musi to jasno mówić
     (inaczej 'Odblokuj aplikację' myli: nie ma czego odblokowywać)."""
-    try:
-        with open_db_storage() as dbst:
-            return not dbst.exists(dbst.join(DB_FILENAME))
-    except Exception:  # noqa: BLE001 — przy wątpliwości zachowaj się jak zwykłe logowanie
-        return False
+    return _db_state() == DB_NONE
 
 
 def _migrate_db_from_remote(settings: AppSettings, dbst, local_path: str) -> None:
@@ -229,9 +260,11 @@ def login_page(request: Request):
     settings = load_settings()
     if not settings.host:
         return RedirectResponse("/setup", status_code=HTTP_302_FOUND)
+    state = _db_state()
     return templates.TemplateResponse(request=request, name="login.html",
                                       context={"error": None,
-                                               "first_run": _is_first_run()})
+                                               "db_state": state,
+                                               "first_run": state == DB_NONE})
 
 
 @app.post("/login")
@@ -241,17 +274,23 @@ def login(request: Request, master_password: str = Form(...),
     if not settings.host:
         return RedirectResponse("/setup", status_code=HTTP_302_FOUND)
 
-    first_run = _is_first_run()
+    state = _db_state()
+    first_run = state == DB_NONE
+
+    def page(error: str, status: int = 200, first: Optional[bool] = None):
+        """Ekran logowania z komunikatem — jeden punkt, żeby żadna gałąź
+        nie zgubiła stanu bazy (od niego zależy treść całego ekranu)."""
+        return templates.TemplateResponse(
+            request=request, name="login.html",
+            context={"error": error, "db_state": state,
+                     "first_run": first_run if first is None else first},
+            status_code=status)
 
     client_ip = request.client.host if request.client else "?"
     blocked_for = LOGIN_GUARD.check(client_ip)
     if blocked_for:
-        return templates.TemplateResponse(
-            request=request, name="login.html",
-            context={"error": "Zbyt dużo nieudanych prób z tego adresu — "
-                              f"blokada jeszcze przez {_human_duration(blocked_for)}.",
-                     "first_run": first_run},
-            status_code=429)
+        return page("Zbyt dużo nieudanych prób z tego adresu — "
+                    f"blokada jeszcze przez {_human_duration(blocked_for)}.", 429)
 
     seccfg = load_security_config()
     if first_run:
@@ -259,16 +298,10 @@ def login(request: Request, master_password: str = Form(...),
         # przyjęte, więc literówka dałaby bazę z hasłem, którego nikt nie zna
         # (nie da się go odzyskać). Stąd wymagane potwierdzenie.
         if len(master_password) < seccfg.min_master_password_length:
-            return templates.TemplateResponse(
-                request=request, name="login.html",
-                context={"error": "Hasło główne musi mieć co najmniej "
-                                  f"{seccfg.min_master_password_length} znaków.",
-                         "first_run": True})
+            return page("Hasło główne musi mieć co najmniej "
+                        f"{seccfg.min_master_password_length} znaków.")
         if confirm_master_password != master_password:
-            return templates.TemplateResponse(
-                request=request, name="login.html",
-                context={"error": "Hasła nie są identyczne — spróbuj ponownie.",
-                         "first_run": True})
+            return page("Hasła nie są identyczne — spróbuj ponownie.")
 
     try:
         with open_db_storage() as dbst:
@@ -287,29 +320,17 @@ def login(request: Request, master_password: str = Form(...),
                          (f" — blokada na {_human_duration(banned_for)}." if banned_for else "."),
                          "security")
         if banned_for:
-            return templates.TemplateResponse(
-                request=request, name="login.html",
-                context={"error": "Zbyt dużo nieudanych prób — adres zablokowany na "
-                                  f"{_human_duration(banned_for)}.",
-                         "first_run": False},
-                status_code=429)
-        return templates.TemplateResponse(
-            request=request, name="login.html",
-            context={"error": "Błędne hasło bazy danych", "first_run": False})
+            return page("Zbyt dużo nieudanych prób — adres zablokowany na "
+                        f"{_human_duration(banned_for)}.", 429, first=False)
+        return page("Błędne hasło bazy danych", first=False)
     except DBTooNewError as e:
         # Drugie (obok API/426) miejsce powiadomienia: już przy logowaniu,
         # zanim ktokolwiek zdąży cokolwiek zapisać do bazy.
-        return templates.TemplateResponse(
-            request=request, name="login.html",
-            context={"error": str(e), "first_run": False})
+        return page(str(e), first=False)
     except DeviceDBError as e:
-        return templates.TemplateResponse(
-            request=request, name="login.html",
-            context={"error": str(e), "first_run": first_run})
+        return page(str(e))
     except Exception as e:
-        return templates.TemplateResponse(
-            request=request, name="login.html",
-            context={"error": f"Błąd połączenia: {e}", "first_run": first_run})
+        return page(f"Błąd połączenia: {e}")
 
     LOGIN_GUARD.record_success(client_ip)
     if seccfg.log_login_attempts:

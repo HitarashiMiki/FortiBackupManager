@@ -37,6 +37,37 @@
                         odzyskać ani zresetować</span>, więc zapisz je w bezpiecznym miejscu.
                     </p>
                 </div>
+                {% elif db_state == 'remote' %}
+                {# Lokalnie bazy nie ma, ale kopia leży na magazynie: to sytuacja
+                   do ODTWORZENIA, nie do zakładania nowej bazy. Logowanie samo
+                   skopiuje plik do /DB (_migrate_db_from_remote). #}
+                <div class="mb-5 p-3 bg-[#d29922]/10 border border-[#d29922]/50 rounded-lg text-sm">
+                    <p class="font-semibold mb-1 text-[#d29922]">
+                        <i class="fa-solid fa-rotate-left mr-2"></i>Baza zostanie odtworzona z magazynu
+                    </p>
+                    <p class="text-[#8b949e]">
+                        W katalogu <code>/DB</code> nie ma pliku <code>devices.db</code>, ale kopia
+                        jest na magazynie. Podaj <span class="text-[#c9d1d9]">dotychczasowe</span>
+                        hasło główne — plik zostanie skopiowany z powrotem.
+                        Jeśli tego nie planowałeś, sprawdź najpierw montowanie katalogu
+                        <code>/DB</code>, zanim cokolwiek zapiszesz.
+                    </p>
+                </div>
+                {% elif db_state == 'unknown' %}
+                {# Nie wiemy, gdzie jest baza (magazyn offline / błąd /DB).
+                   NIE proponujemy zakładania nowej — to najgorsza możliwa rada
+                   w chwili, gdy plik po prostu nie jest widoczny. #}
+                <div class="mb-5 p-3 bg-red-900/30 border border-red-700 rounded-lg text-sm">
+                    <p class="font-semibold mb-1 text-red-400">
+                        <i class="fa-solid fa-triangle-exclamation mr-2"></i>Nie widzę bazy urządzeń
+                    </p>
+                    <p class="text-[#8b949e]">
+                        Brak <code>/DB/devices.db</code>, a magazynu nie udało się sprawdzić.
+                        <span class="text-[#d29922]">Nie zakładaj nowej bazy</span> — najpierw
+                        sprawdź, czy katalog <code>/DB</code> jest poprawnie zamontowany
+                        i czy magazyn odpowiada.
+                    </p>
+                </div>
                 {% endif %}
 
                 <form method="post" action="/login">
@@ -61,7 +92,9 @@
 
                     <button type="submit"
                             class="w-full bg-[#1f6feb] hover:bg-[#388bfd] transition-colors text-white font-semibold py-3 rounded-lg">
-                        {% if first_run %}Ustaw hasło i utwórz bazę{% else %}Odblokuj aplikację{% endif %}
+                        {% if first_run %}Ustaw hasło i utwórz bazę
+                        {%- elif db_state == 'remote' %}Odtwórz bazę i zaloguj
+                        {%- else %}Odblokuj aplikację{% endif %}
                     </button>
                 </form>
             </div>
