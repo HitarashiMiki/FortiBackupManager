@@ -191,14 +191,19 @@
     // Tryb inteligentny ma zahardkodowaną logikę — ręczne pola tracą wtedy sens,
     // więc je wyszarzamy zamiast udawać, że coś zmieniają.
     function applySmartMode() {
-        const smart = document.getElementById('smart_ban').checked;
+        const box = document.getElementById('smart_ban');
+        if (!box) return;
+        const smart = box.checked;
         ['max_attempts', 'window_minutes', 'ban_minutes'].forEach(id => {
             const el = document.getElementById(id);
+            if (!el) return;
             el.disabled = smart;
             el.classList.toggle('opacity-40', smart);
         });
-        document.getElementById('manual-fields').classList.toggle('opacity-60', smart);
-        document.getElementById('grace-field').classList.toggle('hidden', !smart);
+        const manual = document.getElementById('manual-fields');
+        if (manual) manual.classList.toggle('opacity-60', smart);
+        const grace = document.getElementById('grace-field');
+        if (grace) grace.classList.toggle('hidden', !smart);
     }
 
     function renderWhitelist(entries) {
@@ -296,29 +301,54 @@
         loadBans();
     }
 
+
+    let loadedConfig = {};
+
+    function setVal(id, value) {
+        const el = document.getElementById(id);
+        if (el) el.value = value;
+    }
+    function setChk(id, value) {
+        const el = document.getElementById(id);
+        if (el) el.checked = value;
+    }
+    function setTxt(id, value) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = value;
+    }
+    function getVal(id, key) {
+        const el = document.getElementById(id);
+        return el ? el.value : loadedConfig[key];
+    }
+    function getChk(id, key) {
+        const el = document.getElementById(id);
+        return el ? el.checked : loadedConfig[key];
+    }
+
     async function loadSecurity() {
         const res = await fetch('/api/security');
         if (res.status === 401) { window.location = '/login'; return; }
         const data = await res.json();
         const c = data.config;
+        loadedConfig = c;
         smartConsts = data.smart || {};
 
-        document.getElementById('max_attempts').value = c.max_attempts;
-        document.getElementById('window_minutes').value = c.window_minutes;
-        document.getElementById('ban_minutes').value = c.ban_minutes;
-        document.getElementById('smart_ban').checked = c.smart_ban;
-        document.getElementById('smart_grace_bans').value = c.smart_grace_bans;
-        document.getElementById('session_ttl_hours').value = c.session_ttl_hours;
-        document.getElementById('min_master_password_length').value = c.min_master_password_length;
-        document.getElementById('log_login_attempts').checked = c.log_login_attempts;
-        document.getElementById('verify_device_tls').checked = c.verify_device_tls;
+        setVal('max_attempts', c.max_attempts);
+        setVal('window_minutes', c.window_minutes);
+        setVal('ban_minutes', c.ban_minutes);
+        setChk('smart_ban', c.smart_ban);
+        setVal('smart_grace_bans', c.smart_grace_bans);
+        setVal('session_ttl_hours', c.session_ttl_hours);
+        setVal('min_master_password_length', c.min_master_password_length);
+        setChk('log_login_attempts', c.log_login_attempts);
+        setChk('verify_device_tls', c.verify_device_tls);
         renderWhitelist(c.whitelist || []);
 
-        document.getElementById('smart-attempts').textContent = smartConsts.max_attempts;
-        document.getElementById('smart-base').textContent = smartConsts.base_minutes;
-        document.getElementById('smart-factor').textContent = smartConsts.factor;
-        document.getElementById('smart-max').textContent = (smartConsts.max_minutes / 60) + ' h';
-        document.getElementById('smart-grace-label').textContent = c.smart_grace_bans;
+        setTxt('smart-attempts', smartConsts.max_attempts);
+        setTxt('smart-base', smartConsts.base_minutes);
+        setTxt('smart-factor', smartConsts.factor);
+        setTxt('smart-max', (smartConsts.max_minutes / 60) + ' h');
+        setTxt('smart-grace-label', c.smart_grace_bans);
 
         applySmartMode();
         loadBans();
@@ -326,22 +356,24 @@
 
     async function saveSecurity() {
         const body = new URLSearchParams();
-        body.append('max_attempts', document.getElementById('max_attempts').value);
-        body.append('window_minutes', document.getElementById('window_minutes').value);
-        body.append('ban_minutes', document.getElementById('ban_minutes').value);
-        body.append('smart_ban', document.getElementById('smart_ban').checked);
-        body.append('smart_grace_bans', document.getElementById('smart_grace_bans').value);
-        body.append('session_ttl_hours', document.getElementById('session_ttl_hours').value);
-        body.append('min_master_password_length', document.getElementById('min_master_password_length').value);
-        body.append('log_login_attempts', document.getElementById('log_login_attempts').checked);
-        body.append('verify_device_tls', document.getElementById('verify_device_tls').checked);
+        body.append('max_attempts', getVal('max_attempts', 'max_attempts'));
+        body.append('window_minutes', getVal('window_minutes', 'window_minutes'));
+        body.append('ban_minutes', getVal('ban_minutes', 'ban_minutes'));
+        body.append('smart_ban', getChk('smart_ban', 'smart_ban'));
+        body.append('smart_grace_bans', getVal('smart_grace_bans', 'smart_grace_bans'));
+        body.append('session_ttl_hours', getVal('session_ttl_hours', 'session_ttl_hours'));
+        body.append('min_master_password_length',
+                    getVal('min_master_password_length', 'min_master_password_length'));
+        body.append('log_login_attempts', getChk('log_login_attempts', 'log_login_attempts'));
+        body.append('verify_device_tls', getChk('verify_device_tls', 'verify_device_tls'));
         body.append('whitelist', whitelistEntries().join('\n'));
 
         const res = await fetch('/api/security', { method: 'POST', body });
         if (res.status === 401) { window.location = '/login'; return; }
         const data = await res.json().catch(() => ({}));
         if (!res.ok) { flash(data.detail || 'Nie udało się zapisać ustawień.', false); return; }
-        document.getElementById('smart-grace-label').textContent = data.config.smart_grace_bans;
+        loadedConfig = data.config;
+        setTxt('smart-grace-label', data.config.smart_grace_bans);
         renderWhitelist(data.config.whitelist || []);
         flash(data.message || 'Zapisano.', true);
     }

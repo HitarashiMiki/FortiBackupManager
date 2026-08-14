@@ -22,6 +22,7 @@ wystąpienie wskazanej godziny, więc restarty im nie przeszkadzają.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from datetime import datetime, timedelta
@@ -31,7 +32,7 @@ from .config import load_settings
 from .storage import open_storage, open_db_storage
 from .devicedb import DeviceDB, Device
 from .fortigate import run_backup, device_backup_dir
-from .changes import detect_and_log, collapse_unchanged
+from .changes import finalize_backup
 from .retention import apply_retention
 from .jobs import JOBS
 from .eventlog import EVENTLOG
@@ -45,6 +46,12 @@ IDLE_WARN_SECONDS = 24 * 3600
 # "days" i urządzeń, które chwilowo nie backupują (retencja leci też po każdym
 # backupie, ale to nie przycina kopii, gdy backupów brak). Domyślnie raz/dobę.
 RETENTION_SWEEP_SECONDS = 24 * 3600
+
+# Ile backupów z harmonogramu może lecieć NARAZ.
+#
+# Kolejkowanie nie wydłuża okna backupowego w praktyce. Env pozwala podnieść, jeśli magazyn to udźwignie.
+SCHED_MAX_PARALLEL = max(1, int(os.environ.get("FORTIBACKUP_SCHED_PARALLEL", "2") or 2))
+_SLOTS = threading.BoundedSemaphore(SCHED_MAX_PARALLEL)
 
 
 def compute_next_run(dev: Device, now: datetime) -> Optional[datetime]:
@@ -279,6 +286,11 @@ class Scheduler:
 
         def work():
             ok = True
+            # Kolejka: czekamy na wolny slot, żeby nie rzucić całej floty naraz
+            # na jeden serwer SFTP (patrz SCHED_MAX_PARALLEL).
+            if not _SLOTS.acquire(blocking=False):
+                JOBS.log(job, f"[{dev.name}] Czekam na wolny slot backupu...")
+                _SLOTS.acquire()
             try:
                 cfg = load_settings().to_storage_config()
                 with open_storage(cfg) as st:
@@ -286,14 +298,7 @@ class Scheduler:
                     JOBS.log(job, f"[{dev.name}] OK → {path}")
                     device_dir = device_backup_dir(st, dev)
                     log = lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}")  # noqa: E731
-                    changed = detect_and_log(st, device_dir, path, log, device=dev)
-                    # TYLKO harmonogram zwija identyczne kopie. Backup ręczny
-                    # zawsze zostawia nowy plik — jak ktoś klika „Backup teraz",
-                    # to zwykle właśnie po to, żeby mieć kopię z tą chwilą.
-                    collapsed = False
-                    if changed is False:
-                        collapsed = True
-                        path = collapse_unchanged(st, device_dir, path, log)
+                    path, collapsed = finalize_backup(st, device_dir, path, log, device=dev)
                     job.ok_count += 1
                     EVENTLOG.log("success",
                                  (f"Harmonogram — bez zmian: {dev.name} → {path}"
@@ -311,6 +316,8 @@ class Scheduler:
                 EVENTLOG.log("error",
                              f"Harmonogram — backup NIEUDANY: {dev.name} — {e}",
                              "scheduler")
+            finally:
+                _SLOTS.release()      # slot MUSI wrócić, także po wyjątku
             JOBS.finish(job, ok)
 
         threading.Thread(target=work, daemon=True).start()

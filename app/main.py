@@ -50,7 +50,7 @@ from .devicedb import (DeviceDB, Device, WrongPasswordError, DeviceDBError,
                        DBTooNewError, DB_FILENAME, FOLDER_COLORS, db_revision)
 from .fortigate import run_backup, device_backup_dir, sanitize_name, BACKUP_DIR
 from .diff import make_diff_html
-from .changes import (changed_flags, detect_and_log, find_backup_dir_for_host,
+from .changes import (changed_flags, finalize_backup, find_backup_dir_for_host,
                       first_seen_map)
 from .audit import run_audit
 from .retention import apply_retention, RETENTION_MODES
@@ -914,11 +914,17 @@ def _run_backup_job(job, cfg: StorageConfig, mp: str, device_names: Optional[lis
                 try:
                     path = run_backup(dev, st, logger=lambda m: JOBS.log(job, m))
                     JOBS.log(job, f"[{dev.name}] OK → {path}")
-                    detect_and_log(st, device_backup_dir(st, dev), path,
-                                   lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}"),
-                                   device=dev)
+                    log = lambda m, n=dev.name: JOBS.log(job, f"[{n}] {m}")  # noqa: E731
+                    # Backup ręczny zwija identyczne kopie tak samo jak
+                    # automatyczny — dwa bajtowo takie same pliki nie niosą
+                    # żadnej informacji ponad datę, a ta ląduje na tym jednym.
+                    path, collapsed = finalize_backup(
+                        st, device_backup_dir(st, dev), path, log, device=dev)
                     job.ok_count += 1
-                    EVENTLOG.log("success", f"Backup OK: {dev.name} → {path}", "backup")
+                    EVENTLOG.log("success",
+                                 (f"Bez zmian: {dev.name} → {path}" if collapsed
+                                  else f"Backup OK: {dev.name} → {path}"),
+                                 "backup")
                     # przytnij stare kopie wg retencji (best-effort — błąd
                     # retencji nie może unieważnić udanego backupu)
                     try:

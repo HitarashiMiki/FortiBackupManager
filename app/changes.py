@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import posixpath
 import re
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from .diff import normalize_config
 from .storage import RemoteStorage, StorageError
@@ -196,6 +196,19 @@ def collapse_unchanged(storage: RemoteStorage, device_dir: str, new_path: str,
 
     log(f"Konfiguracja bez zmian — zachowano jedną kopię (bez zmian od {_stamp(origin)})")
     return new_path
+
+
+def finalize_backup(storage: RemoteStorage, device_dir: str, new_path: str,
+                    log, device=None) -> Tuple[str, bool]:
+    """Zakończenie udanego backupu: porównaj z poprzednią wersją i — jeśli nic
+    się nie zmieniło — zwiń obie kopie w jedną (patrz collapse_unchanged).
+
+    Jedna ścieżka dla backupu ręcznego i z harmonogramu.
+    Zwraca (ścieżka obowiązującej kopii, czy zwinięto)."""
+    changed = detect_and_log(storage, device_dir, new_path, log, device=device)
+    if changed is False:
+        return collapse_unchanged(storage, device_dir, new_path, log), True
+    return new_path, False
 
 
 def first_seen_map(storage: RemoteStorage, device_dir: str) -> Dict[str, str]:
