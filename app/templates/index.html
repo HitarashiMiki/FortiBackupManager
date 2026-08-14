@@ -1136,9 +1136,16 @@
 
         function loadDevices() {
             fetch('/api/devices')
-                .then(r => {
+                .then(async r => {
                     if (r.status === 401) { window.location = '/login'; throw new Error('401'); }
                     if (handleDbTooNew(r)) throw new Error('426');
+                    // Bez tego odpowiedź błędu ({detail: ...}) przechodziła dalej
+                    // jako dane i lista renderowała się jako „Brak urządzeń" —
+                    // awaria wyglądała jak pusta baza.
+                    if (!r.ok) {
+                        const err = await r.json().catch(() => ({}));
+                        throw new Error(err.detail || `Błąd pobierania urządzeń (HTTP ${r.status})`);
+                    }
                     return r.json();
                 })
                 .then(data => {
@@ -1177,7 +1184,9 @@
                 .catch(err => {
                     if (err.message === '426') return;
                     console.error(err);
-                    addLog("Błąd ładowania listy urządzeń", "error");
+                    // pokaż PRZYCZYNĘ z serwera (np. podmieniony devices.db),
+                    // a nie tylko sam objaw
+                    addLog(err.detail || err.message || "Błąd ładowania listy urządzeń", "error");
                 });
         }
 

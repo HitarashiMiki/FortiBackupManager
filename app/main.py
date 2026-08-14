@@ -130,6 +130,22 @@ def _storage_error_handler(request: Request, exc: StorageError):
     return JSONResponse(status_code=502, content={"detail": f"Magazyn: {exc}"})
 
 
+@app.exception_handler(WrongPasswordError)
+def _wrong_password_handler(request: Request, exc: WrongPasswordError):
+    """Plik bazy nie daje się odszyfrować hasłem TEJ sesji.
+
+    Zdarza się, gdy `devices.db` podmieni się pod działającą aplikacją
+    (odtwarzanie z kopii, przywracanie po awarii) i przywrócony plik ma inne
+    hasło niż to, którym się zalogowano. Bez tego handlera każdy endpoint
+    kończył się gołym 500 z tracebackiem w kontenerze, a w UI pojawiało się
+    tylko „Błąd ładowania listy urządzeń" — czyli objaw bez przyczyny.
+    """
+    return JSONResponse(status_code=409, content={"detail":
+        "Plik devices.db nie pasuje do hasła tej sesji — czy baza została "
+        "podmieniona (odtwarzanie z kopii)? Wyloguj się i zaloguj hasłem, "
+        "którym zaszyfrowano ten plik."})
+
+
 @app.exception_handler(DBTooNewError)
 def _db_too_new_handler(request: Request, exc: DBTooNewError):
     # 426 Upgrade Required — jeden punkt obsługi dla WSZYSTKICH endpointów
